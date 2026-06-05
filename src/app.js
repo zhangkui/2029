@@ -8,6 +8,8 @@ let userInfoCache = {};
 let ws = null;
 let reconnectTimer = null;
 let searchTimer = null;
+let offlineTimers = {}; // 存储用户离线定时器
+const OFFLINE_GRACE_PERIOD = 30000; // 30秒宽限期
 
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
@@ -24,6 +26,11 @@ document.addEventListener('DOMContentLoaded', function() {
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.close();
         }
+        // 清除所有离线定时器
+        Object.keys(offlineTimers).forEach(function(pid) {
+            clearTimeout(offlineTimers[pid]);
+        });
+        offlineTimers = {};
     });
     
     // 点击外部关闭搜索结果
@@ -124,11 +131,9 @@ async function doRegister() {
 // 退出登录
 function doLogout() {
     localStorage.removeItem('chatUser');
-    localStorage.removeItem('chatHistory');
     currentUser = null;
     myPid = null;
     myNickname = null;
-    chats = {};
     currentChatPid = null;
     
     if (ws) {
@@ -426,16 +431,23 @@ function handleWebSocketMessage(data) {
             
         case 'sent':
             if (!data.online) {
-                var systemMsg = {
-                    type: 'system',
-                    text: '对方已经离开，消息无法送达',
-                    time: Date.now()
-                };
-                if (currentChatPid && chats[currentChatPid]) {
-                    chats[currentChatPid].messages.push(systemMsg);
-                    renderMessages();
+                // 检查是否在30秒缓冲期内
+                if (offlineTimers[currentChatPid]) {
+                    // 在缓冲期内，不立即提示，只显示临时提示
+                    showToast('对方暂时离线，消息可能无法送达', 'warning');
+                } else {
+                    // 已确认离线，显示无法送达
+                    var systemMsg = {
+                        type: 'system',
+                        text: '对方已经离开，消息无法送达',
+                        time: Date.now()
+                    };
+                    if (currentChatPid && chats[currentChatPid]) {
+                        chats[currentChatPid].messages.push(systemMsg);
+                        renderMessages();
+                    }
+                    showToast('对方已经离开', 'error');
                 }
-                showToast('对方已经离开', 'error');
             }
             break;
             
@@ -455,6 +467,7 @@ function handleWebSocketMessage(data) {
 // Update user status
 function updateUserStatus(pid, online) {
     if (chats[pid]) {
+        const wasOnline = chats[pid].online;
         chats[pid].online = online;
         
         if (userInfoCache[pid]) {
@@ -467,15 +480,34 @@ function updateUserStatus(pid, online) {
                 statusEl.textContent = online ? '在线' : '离线';
                 statusEl.style.color = online ? 'var(--success-color)' : 'var(--text-muted)';
             }
-            
-            if (!online) {
-                var systemMsg = {
-                    type: 'system',
-                    text: '对方已离开',
-                    time: Date.now()
-                };
-                chats[pid].messages.push(systemMsg);
-                renderMessages();
+        }
+        
+        if (wasOnline && !online) {
+            // 用户从在线变为离线，启动30秒缓冲定时器
+            if (offlineTimers[pid]) {
+                clearTimeout(offlineTimers[pid]);
+            }
+            offlineTimers[pid] = setTimeout(function() {
+                // 30秒后检查用户是否仍离线
+                if (chats[pid] && !chats[pid].online) {
+                    var systemMsg = {
+                        type: 'system',
+                        text: '对方已离开',
+                        time: Date.now()
+                    };
+                    chats[pid].messages.push(systemMsg);
+                    if (pid === currentChatPid) {
+                        renderMessages();
+                    }
+                    saveChatHistory();
+                }
+                delete offlineTimers[pid];
+            }, OFFLINE_GRACE_PERIOD);
+        } else if (!wasOnline && online) {
+            // 用户从离线变为在线，清除缓冲定时器
+            if (offlineTimers[pid]) {
+                clearTimeout(offlineTimers[pid]);
+                delete offlineTimers[pid];
             }
         }
         

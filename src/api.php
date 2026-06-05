@@ -25,6 +25,117 @@ if (!is_dir($dataDir)) {
 }
 
 /**
+ * 获取用户账户数据
+ */
+function getAccounts() {
+    global $dataDir;
+    $file = "$dataDir/accounts.json";
+    if (file_exists($file)) {
+        return json_decode(file_get_contents($file), true) ?: [];
+    }
+    return [];
+}
+
+/**
+ * 保存用户账户数据
+ */
+function saveAccounts($accounts) {
+    global $dataDir;
+    $file = "$dataDir/accounts.json";
+    file_put_contents($file, json_encode($accounts, JSON_PRETTY_PRINT));
+}
+
+/**
+ * 生成32位固定PID
+ */
+function generateFixedPid() {
+    $chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    $pid = '';
+    for ($i = 0; $i < 32; $i++) {
+        $pid .= $chars[random_int(0, strlen($chars) - 1)];
+    }
+    return $pid;
+}
+
+/**
+ * 根据PID获取用户信息
+ */
+function getUserByPid($pid) {
+    $accounts = getAccounts();
+    foreach ($accounts as $username => $user) {
+        if ($user['pid'] === $pid) {
+            return [
+                'username' => $username,
+                'nickname' => $user['nickname'],
+                'pid' => $user['pid']
+            ];
+        }
+    }
+    return null;
+}
+
+/**
+ * 根据用户名获取用户信息
+ */
+function getUserByUsername($username) {
+    $accounts = getAccounts();
+    if (isset($accounts[$username])) {
+        return [
+            'username' => $username,
+            'nickname' => $accounts[$username]['nickname'],
+            'pid' => $accounts[$username]['pid']
+        ];
+    }
+    return null;
+}
+
+/**
+ * 搜索用户
+ * 昵称模糊搜索，用户名和PID精确匹配
+ */
+function searchUsers($keyword) {
+    $accounts = getAccounts();
+    $results = [];
+    $keywordLower = strtolower($keyword);
+    
+    foreach ($accounts as $username => $user) {
+        // 用户名精确匹配
+        if (strtolower($username) === $keywordLower) {
+            $results[] = [
+                'username' => $username,
+                'nickname' => $user['nickname'],
+                'pid' => $user['pid'],
+                'matchType' => 'username'
+            ];
+            continue;
+        }
+        
+        // PID精确匹配
+        if ($user['pid'] === $keyword) {
+            $results[] = [
+                'username' => $username,
+                'nickname' => $user['nickname'],
+                'pid' => $user['pid'],
+                'matchType' => 'pid'
+            ];
+            continue;
+        }
+        
+        // 昵称模糊搜索
+        if (stripos($user['nickname'], $keyword) !== false) {
+            $results[] = [
+                'username' => $username,
+                'nickname' => $user['nickname'],
+                'pid' => $user['pid'],
+                'matchType' => 'nickname'
+            ];
+        }
+    }
+    
+    return $results;
+}
+
+/**
  * 获取消息队列
  */
 function getMessages($pid) {
@@ -143,6 +254,95 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $input['action'] ?? $action;
     
     switch ($action) {
+        case 'userRegister':
+            $username = trim($input['username'] ?? '');
+            $password = $input['password'] ?? '';
+            $nickname = trim($input['nickname'] ?? '');
+            
+            if (strlen($username) < 3 || strlen($username) > 20) {
+                echo json_encode(['success' => false, 'error' => '用户名长度必须在3-20个字符之间']);
+                break;
+            }
+            
+            if (!preg_match('/^[a-zA-Z0-9_]+$/', $username)) {
+                echo json_encode(['success' => false, 'error' => '用户名只能包含字母、数字和下划线']);
+                break;
+            }
+            
+            if (strlen($password) < 6) {
+                echo json_encode(['success' => false, 'error' => '密码长度不能少于6位']);
+                break;
+            }
+            
+            if (strlen($nickname) < 1 || strlen($nickname) > 20) {
+                echo json_encode(['success' => false, 'error' => '昵称长度必须在1-20个字符之间']);
+                break;
+            }
+            
+            $accounts = getAccounts();
+            if (isset($accounts[$username])) {
+                echo json_encode(['success' => false, 'error' => '用户名已存在']);
+                break;
+            }
+            
+            // 生成固定PID，确保唯一
+            $pid = generateFixedPid();
+            while (true) {
+                $exists = false;
+                foreach ($accounts as $user) {
+                    if ($user['pid'] === $pid) {
+                        $exists = true;
+                        break;
+                    }
+                }
+                if (!$exists) break;
+                $pid = generateFixedPid();
+            }
+            
+            $accounts[$username] = [
+                'password' => password_hash($password, PASSWORD_DEFAULT),
+                'nickname' => $nickname,
+                'pid' => $pid,
+                'createdAt' => time()
+            ];
+            
+            saveAccounts($accounts);
+            
+            echo json_encode([
+                'success' => true,
+                'user' => [
+                    'username' => $username,
+                    'nickname' => $nickname,
+                    'pid' => $pid
+                ]
+            ]);
+            break;
+            
+        case 'userLogin':
+            $username = trim($input['username'] ?? '');
+            $password = $input['password'] ?? '';
+            
+            $accounts = getAccounts();
+            if (!isset($accounts[$username])) {
+                echo json_encode(['success' => false, 'error' => '用户名或密码错误']);
+                break;
+            }
+            
+            if (!password_verify($password, $accounts[$username]['password'])) {
+                echo json_encode(['success' => false, 'error' => '用户名或密码错误']);
+                break;
+            }
+            
+            echo json_encode([
+                'success' => true,
+                'user' => [
+                    'username' => $username,
+                    'nickname' => $accounts[$username]['nickname'],
+                    'pid' => $accounts[$username]['pid']
+                ]
+            ]);
+            break;
+            
         case 'register':
             $pid = $input['pid'] ?? '';
             if (strlen($pid) === 32) {
@@ -156,15 +356,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'send':
             $message = $input['message'] ?? null;
             if ($message && isset($message['to']) && isset($message['from']) && isset($message['text'])) {
-                // 检查接收者是否在线
                 $recipientOnline = isUserOnline($message['to']);
                 
                 if ($recipientOnline) {
-                    // 存储到接收者的消息队列
                     storeMessage($message['to'], $message);
                 }
                 
-                // 更新发送者活跃时间
                 updateUserActivity($message['from']);
                 echo json_encode(['success' => true, 'online' => $recipientOnline]);
             } else {
@@ -180,6 +377,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // GET 请求
 switch ($action) {
+    case 'search':
+        $keyword = trim($_GET['keyword'] ?? '');
+        if (strlen($keyword) < 1) {
+            echo json_encode(['success' => false, 'error' => '请输入搜索关键词']);
+            break;
+        }
+        
+        $results = searchUsers($keyword);
+        
+        // 为每个结果添加在线状态
+        foreach ($results as &$result) {
+            $result['online'] = isUserOnline($result['pid']);
+        }
+        
+        echo json_encode(['success' => true, 'users' => $results]);
+        break;
+        
+    case 'getUser':
+        $pid = $_GET['pid'] ?? '';
+        $username = $_GET['username'] ?? '';
+        
+        $user = null;
+        if ($pid) {
+            $user = getUserByPid($pid);
+        } else if ($username) {
+            $user = getUserByUsername($username);
+        }
+        
+        if ($user) {
+            $user['online'] = isUserOnline($user['pid']);
+            echo json_encode(['success' => true, 'user' => $user]);
+        } else {
+            echo json_encode(['success' => false, 'error' => '用户不存在']);
+        }
+        break;
+        
     case 'poll':
         $pid = $_GET['pid'] ?? '';
         if (strlen($pid) === 32) {

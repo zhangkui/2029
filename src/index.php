@@ -8,7 +8,54 @@
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
+    <!-- 登录/注册页面 -->
+    <div class="auth-container" id="authContainer">
+        <div class="auth-box">
+            <div class="auth-header">
+                <h1>聊天室</h1>
+                <p>登录或注册开始聊天</p>
+            </div>
+            
+            <!-- 登录表单 -->
+            <div class="auth-form" id="loginForm">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" id="loginUsername" placeholder="请输入用户名" maxlength="20">
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" id="loginPassword" placeholder="请输入密码" maxlength="50">
+                </div>
+                <button class="auth-btn" onclick="doLogin()">登录</button>
+                <p class="auth-switch">
+                    还没有账号？<a href="javascript:void(0)" onclick="showRegister()">立即注册</a>
+                </p>
+            </div>
+            
+            <!-- 注册表单 -->
+            <div class="auth-form" id="registerForm" style="display: none;">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" id="regUsername" placeholder="3-20个字符，字母数字下划线" maxlength="20">
+                </div>
+                <div class="form-group">
+                    <label>昵称</label>
+                    <input type="text" id="regNickname" placeholder="1-20个字符" maxlength="20">
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" id="regPassword" placeholder="至少6位" maxlength="50">
+                </div>
+                <button class="auth-btn" onclick="doRegister()">注册</button>
+                <p class="auth-switch">
+                    已有账号？<a href="javascript:void(0)" onclick="showLogin()">返回登录</a>
+                </p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 主聊天界面 -->
+    <div class="container" id="chatContainer" style="display: none;">
         <!-- 左侧边栏 -->
         <div class="sidebar">
             <div class="user-info">
@@ -18,7 +65,7 @@
                     </svg>
                 </div>
                 <div class="my-pid">
-                    <span class="label">我的PID</span>
+                    <span class="label" id="myNickname">加载中...</span>
                     <span class="pid-value" id="myPid">加载中...</span>
                     <button class="copy-btn" onclick="copyPid()" title="复制PID">
                         <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
@@ -26,15 +73,22 @@
                         </svg>
                     </button>
                 </div>
+                <button class="logout-btn" onclick="doLogout()" title="退出登录">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+                        <path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5c-1.11 0-2 .9-2 2v4h2V5h14v14H5v-4H3v4c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
+                    </svg>
+                </button>
             </div>
             
             <div class="new-chat">
-                <input type="text" id="targetPid" placeholder="输入对方PID开始聊天" maxlength="32">
-                <button onclick="startChat()" class="start-btn">
+                <input type="text" id="searchInput" placeholder="输入PID/用户名/昵称搜索" oninput="handleSearchInput(event)" onkeypress="handleSearchKeyPress(event)">
+                <button onclick="doSearch()" class="start-btn">
                     <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
-                        <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>
+                        <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
                     </svg>
                 </button>
+                <!-- 搜索结果下拉框 -->
+                <div class="search-results" id="searchResults" style="display: none;"></div>
             </div>
             
             <div class="chat-list" id="chatList">
@@ -43,7 +97,7 @@
                         <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
                     </svg>
                     <p>暂无聊天</p>
-                    <span>输入对方PID开始聊天</span>
+                    <span>搜索用户开始聊天</span>
                 </div>
             </div>
         </div>
@@ -55,8 +109,8 @@
                     <svg viewBox="0 0 24 24" fill="currentColor" width="80" height="80">
                         <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
                     </svg>
-                    <h2>临时聊天室</h2>
-                    <p>选择一个聊天或输入对方PID开始新对话</p>
+                    <h2>聊天室</h2>
+                    <p>选择一个聊天或搜索用户开始新对话</p>
                     <div class="features">
                         <div class="feature">
                             <span class="icon">🔒</span>
@@ -67,8 +121,8 @@
                             <span>实时消息</span>
                         </div>
                         <div class="feature">
-                            <span class="icon">🗑️</span>
-                            <span>阅后即焚</span>
+                            <span class="icon">�</span>
+                            <span>固定身份</span>
                         </div>
                     </div>
                 </div>
@@ -83,8 +137,8 @@
                             </svg>
                         </div>
                         <div class="chat-target">
-                            <span class="target-pid" id="targetPidDisplay">-</span>
-                            <span class="status" id="onlineStatus">临时用户</span>
+                            <span class="target-pid" id="targetNameDisplay">-</span>
+                            <span class="status" id="onlineStatus">离线</span>
                         </div>
                     </div>
                     <button class="close-btn" onclick="closeChat()">

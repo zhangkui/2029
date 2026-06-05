@@ -1,449 +1,371 @@
 <?php
-/**
- * 临时聊天室 API
- * 使用文件存储消息和用户状态
- */
+
+require_once 'db.php';
 
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
 
-// 处理预检请求
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit(0);
 }
 
-// 消息过期时间（秒）
-$messageExpiry = 3600; // 1小时
-$userExpiry = 300; // 5分钟无活动则过期
+try {
+    $action = $_GET['action'] ?? '';
 
-// 文件存储路径
-$dataDir = '/var/www/data';
-if (!is_dir($dataDir)) {
-    mkdir($dataDir, 0777, true);
-}
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $input = json_decode(file_get_contents('php://input'), true);
+        $action = $input['action'] ?? $action;
 
-/**
- * 获取用户账户数据
- */
-function getAccounts() {
-    global $dataDir;
-    $file = "$dataDir/accounts.json";
-    if (file_exists($file)) {
-        return json_decode(file_get_contents($file), true) ?: [];
-    }
-    return [];
-}
-
-/**
- * 保存用户账户数据
- */
-function saveAccounts($accounts) {
-    global $dataDir;
-    $file = "$dataDir/accounts.json";
-    file_put_contents($file, json_encode($accounts, JSON_PRETTY_PRINT));
-}
-
-/**
- * 生成32位固定PID
- */
-function generateFixedPid() {
-    $chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    $pid = '';
-    for ($i = 0; $i < 32; $i++) {
-        $pid .= $chars[random_int(0, strlen($chars) - 1)];
-    }
-    return $pid;
-}
-
-/**
- * 根据PID获取用户信息
- */
-function getUserByPid($pid) {
-    $accounts = getAccounts();
-    foreach ($accounts as $username => $user) {
-        if ($user['pid'] === $pid) {
-            return [
-                'username' => $username,
-                'nickname' => $user['nickname'],
-                'pid' => $user['pid']
-            ];
+        switch ($action) {
+            case 'userRegister':
+                handleUserRegister($input);
+                break;
+            case 'userLogin':
+                handleUserLogin($input);
+                break;
+            case 'register':
+                handleRegister($input);
+                break;
+            case 'send':
+                handleSendMessage($input);
+                break;
+            case 'saveMessage':
+                handleSaveMessage($input);
+                break;
+            case 'markAsRead':
+                handleMarkAsRead($input);
+                break;
+            case 'updateMessageStatus':
+                handleUpdateMessageStatus($input);
+                break;
+            default:
+                echo json_encode(['success' => false, 'error' => 'Unknown action']);
         }
+        exit;
     }
-    return null;
-}
 
-/**
- * 根据用户名获取用户信息
- */
-function getUserByUsername($username) {
-    $accounts = getAccounts();
-    if (isset($accounts[$username])) {
-        return [
-            'username' => $username,
-            'nickname' => $accounts[$username]['nickname'],
-            'pid' => $accounts[$username]['pid']
-        ];
-    }
-    return null;
-}
-
-/**
- * 搜索用户
- * 昵称模糊搜索，用户名和PID精确匹配
- */
-function searchUsers($keyword) {
-    $accounts = getAccounts();
-    $results = [];
-    $keywordLower = strtolower($keyword);
-    
-    foreach ($accounts as $username => $user) {
-        // 用户名精确匹配
-        if (strtolower($username) === $keywordLower) {
-            $results[] = [
-                'username' => $username,
-                'nickname' => $user['nickname'],
-                'pid' => $user['pid'],
-                'matchType' => 'username'
-            ];
-            continue;
-        }
-        
-        // PID精确匹配
-        if ($user['pid'] === $keyword) {
-            $results[] = [
-                'username' => $username,
-                'nickname' => $user['nickname'],
-                'pid' => $user['pid'],
-                'matchType' => 'pid'
-            ];
-            continue;
-        }
-        
-        // 昵称模糊搜索
-        if (stripos($user['nickname'], $keyword) !== false) {
-            $results[] = [
-                'username' => $username,
-                'nickname' => $user['nickname'],
-                'pid' => $user['pid'],
-                'matchType' => 'nickname'
-            ];
-        }
-    }
-    
-    return $results;
-}
-
-/**
- * 获取消息队列
- */
-function getMessages($pid) {
-    global $dataDir;
-    
-    $file = "$dataDir/messages_$pid.json";
-    if (file_exists($file)) {
-        $messages = json_decode(file_get_contents($file), true) ?: [];
-        // 获取后清空
-        file_put_contents($file, '[]');
-        return $messages;
-    }
-    return [];
-}
-
-/**
- * 存储消息
- */
-function storeMessage($toPid, $message) {
-    global $dataDir;
-    
-    $file = "$dataDir/messages_$toPid.json";
-    $messages = [];
-    if (file_exists($file)) {
-        $messages = json_decode(file_get_contents($file), true) ?: [];
-    }
-    $messages[] = $message;
-    
-    // 限制消息数量
-    if (count($messages) > 100) {
-        $messages = array_slice($messages, -100);
-    }
-    
-    file_put_contents($file, json_encode($messages));
-    return true;
-}
-
-/**
- * 注册用户
- */
-function registerUser($pid) {
-    global $dataDir;
-    
-    $file = "$dataDir/users.json";
-    $users = [];
-    if (file_exists($file)) {
-        $users = json_decode(file_get_contents($file), true) ?: [];
-    }
-    $users[$pid] = time();
-    file_put_contents($file, json_encode($users));
-    return true;
-}
-
-/**
- * 注销用户
- */
-function logoutUser($pid) {
-    global $dataDir;
-    
-    $file = "$dataDir/users.json";
-    if (file_exists($file)) {
-        $users = json_decode(file_get_contents($file), true) ?: [];
-        unset($users[$pid]);
-        file_put_contents($file, json_encode($users));
-    }
-    
-    $msgFile = "$dataDir/messages_$pid.json";
-    if (file_exists($msgFile)) {
-        unlink($msgFile);
-    }
-    
-    return true;
-}
-
-/**
- * 检查用户是否在线
- */
-function isUserOnline($pid) {
-    global $dataDir, $userExpiry;
-    
-    $file = "$dataDir/users.json";
-    if (file_exists($file)) {
-        $users = json_decode(file_get_contents($file), true) ?: [];
-        if (isset($users[$pid])) {
-            // 检查是否过期
-            if (time() - $users[$pid] < $userExpiry) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-/**
- * 更新用户活跃时间
- */
-function updateUserActivity($pid) {
-    global $dataDir;
-    
-    $file = "$dataDir/users.json";
-    if (file_exists($file)) {
-        $users = json_decode(file_get_contents($file), true) ?: [];
-        if (isset($users[$pid])) {
-            $users[$pid] = time();
-            file_put_contents($file, json_encode($users));
-        }
-    }
-}
-
-// 处理请求
-$action = $_GET['action'] ?? '';
-
-// POST 请求
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $input = json_decode(file_get_contents('php://input'), true);
-    $action = $input['action'] ?? $action;
-    
     switch ($action) {
-        case 'userRegister':
-            $username = trim($input['username'] ?? '');
-            $password = $input['password'] ?? '';
-            $nickname = trim($input['nickname'] ?? '');
-            
-            if (strlen($username) < 3 || strlen($username) > 20) {
-                echo json_encode(['success' => false, 'error' => '用户名长度必须在3-20个字符之间']);
-                break;
-            }
-            
-            if (!preg_match('/^[a-zA-Z0-9_]+$/', $username)) {
-                echo json_encode(['success' => false, 'error' => '用户名只能包含字母、数字和下划线']);
-                break;
-            }
-            
-            if (strlen($password) < 6) {
-                echo json_encode(['success' => false, 'error' => '密码长度不能少于6位']);
-                break;
-            }
-            
-            if (strlen($nickname) < 1 || strlen($nickname) > 20) {
-                echo json_encode(['success' => false, 'error' => '昵称长度必须在1-20个字符之间']);
-                break;
-            }
-            
-            $accounts = getAccounts();
-            if (isset($accounts[$username])) {
-                echo json_encode(['success' => false, 'error' => '用户名已存在']);
-                break;
-            }
-            
-            // 生成固定PID，确保唯一
-            $pid = generateFixedPid();
-            while (true) {
-                $exists = false;
-                foreach ($accounts as $user) {
-                    if ($user['pid'] === $pid) {
-                        $exists = true;
-                        break;
-                    }
-                }
-                if (!$exists) break;
-                $pid = generateFixedPid();
-            }
-            
-            $accounts[$username] = [
-                'password' => password_hash($password, PASSWORD_DEFAULT),
-                'nickname' => $nickname,
-                'pid' => $pid,
-                'createdAt' => time()
-            ];
-            
-            saveAccounts($accounts);
-            
-            echo json_encode([
-                'success' => true,
-                'user' => [
-                    'username' => $username,
-                    'nickname' => $nickname,
-                    'pid' => $pid
-                ]
-            ]);
+        case 'search':
+            handleSearch();
             break;
-            
-        case 'userLogin':
-            $username = trim($input['username'] ?? '');
-            $password = $input['password'] ?? '';
-            
-            $accounts = getAccounts();
-            if (!isset($accounts[$username])) {
-                echo json_encode(['success' => false, 'error' => '用户名或密码错误']);
-                break;
-            }
-            
-            if (!password_verify($password, $accounts[$username]['password'])) {
-                echo json_encode(['success' => false, 'error' => '用户名或密码错误']);
-                break;
-            }
-            
-            echo json_encode([
-                'success' => true,
-                'user' => [
-                    'username' => $username,
-                    'nickname' => $accounts[$username]['nickname'],
-                    'pid' => $accounts[$username]['pid']
-                ]
-            ]);
+        case 'getUser':
+            handleGetUser();
             break;
-            
-        case 'register':
-            $pid = $input['pid'] ?? '';
-            if (strlen($pid) === 32) {
-                registerUser($pid);
-                echo json_encode(['success' => true]);
-            } else {
-                echo json_encode(['success' => false, 'error' => 'Invalid PID']);
-            }
+        case 'poll':
+            handlePoll();
             break;
-            
-        case 'send':
-            $message = $input['message'] ?? null;
-            if ($message && isset($message['to']) && isset($message['from']) && isset($message['text'])) {
-                $recipientOnline = isUserOnline($message['to']);
-                
-                if ($recipientOnline) {
-                    storeMessage($message['to'], $message);
-                }
-                
-                updateUserActivity($message['from']);
-                echo json_encode(['success' => true, 'online' => $recipientOnline]);
-            } else {
-                echo json_encode(['success' => false, 'error' => 'Invalid message']);
-            }
+        case 'logout':
+            handleLogout();
             break;
-            
+        case 'check':
+            handleCheckStatus();
+            break;
+        case 'getConversations':
+            handleGetConversations();
+            break;
+        case 'getConversationMessages':
+            handleGetConversationMessages();
+            break;
+        case 'getOrCreateConversation':
+            handleGetOrCreateConversation();
+            break;
+        case 'getUnreadCount':
+            handleGetUnreadCount();
+            break;
         default:
             echo json_encode(['success' => false, 'error' => 'Unknown action']);
     }
-    exit;
+} catch (Exception $e) {
+    error_log('API Error: ' . $e->getMessage());
+    echo json_encode(['success' => false, 'error' => '服务器错误']);
 }
 
-// GET 请求
-switch ($action) {
-    case 'search':
-        $keyword = trim($_GET['keyword'] ?? '');
-        if (strlen($keyword) < 1) {
-            echo json_encode(['success' => false, 'error' => '请输入搜索关键词']);
-            break;
-        }
-        
-        $results = searchUsers($keyword);
-        
-        // 为每个结果添加在线状态
-        foreach ($results as &$result) {
-            $result['online'] = isUserOnline($result['pid']);
-        }
-        
-        echo json_encode(['success' => true, 'users' => $results]);
-        break;
-        
-    case 'getUser':
-        $pid = $_GET['pid'] ?? '';
-        $username = $_GET['username'] ?? '';
-        
-        $user = null;
-        if ($pid) {
-            $user = getUserByPid($pid);
-        } else if ($username) {
-            $user = getUserByUsername($username);
-        }
-        
-        if ($user) {
-            $user['online'] = isUserOnline($user['pid']);
-            echo json_encode(['success' => true, 'user' => $user]);
-        } else {
-            echo json_encode(['success' => false, 'error' => '用户不存在']);
-        }
-        break;
-        
-    case 'poll':
-        $pid = $_GET['pid'] ?? '';
-        if (strlen($pid) === 32) {
-            updateUserActivity($pid);
-            $messages = getMessages($pid);
-            echo json_encode(['success' => true, 'messages' => $messages]);
-        } else {
-            echo json_encode(['success' => false, 'error' => 'Invalid PID']);
-        }
-        break;
-        
-    case 'logout':
-        $pid = $_GET['pid'] ?? '';
-        if (strlen($pid) === 32) {
-            logoutUser($pid);
-            echo json_encode(['success' => true]);
-        } else {
-            echo json_encode(['success' => false, 'error' => 'Invalid PID']);
-        }
-        break;
-        
-    case 'check':
-        $pid = $_GET['pid'] ?? '';
-        if (strlen($pid) === 32) {
-            $online = isUserOnline($pid);
-            echo json_encode(['success' => true, 'online' => $online]);
-        } else {
-            echo json_encode(['success' => false, 'error' => 'Invalid PID']);
-        }
-        break;
-        
-    default:
-        echo json_encode(['success' => false, 'error' => 'Unknown action']);
+function handleUserRegister($input) {
+    $username = trim($input['username'] ?? '');
+    $password = $input['password'] ?? '';
+    $nickname = trim($input['nickname'] ?? '');
+
+    if (strlen($username) < 3 || strlen($username) > 20) {
+        echo json_encode(['success' => false, 'error' => '用户名长度必须在3-20个字符之间']);
+        return;
+    }
+
+    if (!preg_match('/^[a-zA-Z0-9_]+$/', $username)) {
+        echo json_encode(['success' => false, 'error' => '用户名只能包含字母、数字和下划线']);
+        return;
+    }
+
+    if (strlen($password) < 6) {
+        echo json_encode(['success' => false, 'error' => '密码长度不能少于6位']);
+        return;
+    }
+
+    if (strlen($nickname) < 1 || strlen($nickname) > 20) {
+        echo json_encode(['success' => false, 'error' => '昵称长度必须在1-20个字符之间']);
+        return;
+    }
+
+    $existingUser = getUserByUsername($username);
+    if ($existingUser) {
+        echo json_encode(['success' => false, 'error' => '用户名已存在']);
+        return;
+    }
+
+    $user = registerUser($username, $nickname, $password);
+
+    echo json_encode([
+        'success' => true,
+        'user' => $user
+    ]);
+}
+
+function handleUserLogin($input) {
+    $username = trim($input['username'] ?? '');
+    $password = $input['password'] ?? '';
+
+    $user = getUserByUsername($username);
+    if (!$user || !password_verify($password, $user['password'])) {
+        echo json_encode(['success' => false, 'error' => '用户名或密码错误']);
+        return;
+    }
+
+    echo json_encode([
+        'success' => true,
+        'user' => [
+            'username' => $user['username'],
+            'nickname' => $user['nickname'],
+            'pid' => $user['pid']
+        ]
+    ]);
+}
+
+function handleRegister($input) {
+    $pid = $input['pid'] ?? '';
+    if (strlen($pid) === 32) {
+        updateUserActivity($pid, true);
+        echo json_encode(['success' => true]);
+    } else {
+        echo json_encode(['success' => false, 'error' => 'Invalid PID']);
+    }
+}
+
+function handleSendMessage($input) {
+    $message = $input['message'] ?? null;
+    if (!$message || !isset($message['to']) || !isset($message['from']) || !isset($message['text'])) {
+        echo json_encode(['success' => false, 'error' => 'Invalid message']);
+        return;
+    }
+
+    $recipientOnline = isUserOnline($message['to']);
+    updateUserActivity($message['from']);
+
+    $conversationId = getOrCreateConversation($message['from'], $message['to']);
+    $status = $recipientOnline ? 'delivered' : 'sent';
+    $messageId = saveMessage($conversationId, $message['from'], $message['to'], $message['text'], $status);
+
+    echo json_encode([
+        'success' => true,
+        'online' => $recipientOnline,
+        'messageId' => $messageId,
+        'status' => $status
+    ]);
+}
+
+function handleSaveMessage($input) {
+    $fromPid = $input['from'] ?? '';
+    $toPid = $input['to'] ?? '';
+    $text = $input['text'] ?? '';
+    $status = $input['status'] ?? 'sent';
+
+    if (!$fromPid || !$toPid || !$text) {
+        echo json_encode(['success' => false, 'error' => 'Invalid parameters']);
+        return;
+    }
+
+    $conversationId = getOrCreateConversation($fromPid, $toPid);
+    $messageId = saveMessage($conversationId, $fromPid, $toPid, $text, $status);
+
+    echo json_encode([
+        'success' => true,
+        'messageId' => $messageId
+    ]);
+}
+
+function handleMarkAsRead($input) {
+    $userPid = $input['userPid'] ?? '';
+    $otherPid = $input['otherPid'] ?? '';
+
+    if (!$userPid || !$otherPid) {
+        echo json_encode(['success' => false, 'error' => 'Invalid parameters']);
+        return;
+    }
+
+    $conversationId = getOrCreateConversation($userPid, $otherPid);
+
+    $count = markMessagesAsRead($conversationId, $userPid);
+    updateLastReadAt($conversationId, $userPid);
+
+    echo json_encode([
+        'success' => true,
+        'markedCount' => $count,
+        'conversationId' => $conversationId
+    ]);
+}
+
+function handleUpdateMessageStatus($input) {
+    $messageId = $input['messageId'] ?? '';
+    $status = $input['status'] ?? '';
+
+    if (!$messageId || !in_array($status, ['sent', 'delivered', 'read'])) {
+        echo json_encode(['success' => false, 'error' => 'Invalid parameters']);
+        return;
+    }
+
+    $count = updateMessageStatus($messageId, $status);
+
+    echo json_encode([
+        'success' => true,
+        'updatedCount' => $count
+    ]);
+}
+
+function handleSearch() {
+    $keyword = trim($_GET['keyword'] ?? '');
+    $myPid = $_GET['myPid'] ?? '';
+
+    if (strlen($keyword) < 1) {
+        echo json_encode(['success' => false, 'error' => '请输入搜索关键词']);
+        return;
+    }
+
+    $results = searchUsers($keyword, $myPid);
+
+    foreach ($results as &$result) {
+        $result['online'] = isUserOnline($result['pid']);
+    }
+
+    echo json_encode(['success' => true, 'users' => $results]);
+}
+
+function handleGetUser() {
+    $pid = $_GET['pid'] ?? '';
+    $username = $_GET['username'] ?? '';
+
+    $user = null;
+    if ($pid) {
+        $user = getUserByPid($pid);
+    } else if ($username) {
+        $user = getUserByUsername($username);
+    }
+
+    if ($user) {
+        $user['online'] = isUserOnline($user['pid']);
+        echo json_encode(['success' => true, 'user' => $user]);
+    } else {
+        echo json_encode(['success' => false, 'error' => '用户不存在']);
+    }
+}
+
+function handlePoll() {
+    $pid = $_GET['pid'] ?? '';
+    if (strlen($pid) !== 32) {
+        echo json_encode(['success' => false, 'error' => 'Invalid PID']);
+        return;
+    }
+
+    updateUserActivity($pid);
+    echo json_encode(['success' => true]);
+}
+
+function handleLogout() {
+    $pid = $_GET['pid'] ?? '';
+    if (strlen($pid) !== 32) {
+        echo json_encode(['success' => false, 'error' => 'Invalid PID']);
+        return;
+    }
+
+    setUserOffline($pid);
+    echo json_encode(['success' => true]);
+}
+
+function handleCheckStatus() {
+    $pid = $_GET['pid'] ?? '';
+    if (strlen($pid) !== 32) {
+        echo json_encode(['success' => false, 'error' => 'Invalid PID']);
+        return;
+    }
+
+    $online = isUserOnline($pid);
+    echo json_encode(['success' => true, 'online' => $online]);
+}
+
+function handleGetConversations() {
+    $pid = $_GET['pid'] ?? '';
+    if (strlen($pid) !== 32) {
+        echo json_encode(['success' => false, 'error' => 'Invalid PID']);
+        return;
+    }
+
+    $conversations = getUserConversations($pid);
+
+    foreach ($conversations as &$conv) {
+        $conv['unread_count'] = (int)$conv['unread_count'];
+        $conv['is_online'] = (bool)$conv['is_online'];
+        $conv['last_time_timestamp'] = $conv['last_time'] ? strtotime($conv['last_time']) * 1000 : null;
+    }
+
+    echo json_encode(['success' => true, 'conversations' => $conversations]);
+}
+
+function handleGetConversationMessages() {
+    $pid = $_GET['pid'] ?? '';
+    $otherPid = $_GET['otherPid'] ?? '';
+    $limit = (int)($_GET['limit'] ?? 100);
+    $offset = (int)($_GET['offset'] ?? 0);
+
+    if (strlen($pid) !== 32 || strlen($otherPid) !== 32) {
+        echo json_encode(['success' => false, 'error' => 'Invalid PID']);
+        return;
+    }
+
+    $conversationId = getOrCreateConversation($pid, $otherPid);
+    $messages = getConversationMessages($conversationId, $limit, $offset);
+
+    $messages = array_reverse($messages);
+
+    echo json_encode([
+        'success' => true,
+        'conversationId' => $conversationId,
+        'messages' => $messages
+    ]);
+}
+
+function handleGetOrCreateConversation() {
+    $pid1 = $_GET['pid1'] ?? '';
+    $pid2 = $_GET['pid2'] ?? '';
+
+    if (strlen($pid1) !== 32 || strlen($pid2) !== 32) {
+        echo json_encode(['success' => false, 'error' => 'Invalid PID']);
+        return;
+    }
+
+    $conversationId = getOrCreateConversation($pid1, $pid2);
+    echo json_encode(['success' => true, 'conversationId' => $conversationId]);
+}
+
+function handleGetUnreadCount() {
+    $pid = $_GET['pid'] ?? '';
+    $otherPid = $_GET['otherPid'] ?? '';
+
+    if (strlen($pid) !== 32 || strlen($otherPid) !== 32) {
+        echo json_encode(['success' => false, 'error' => 'Invalid PID']);
+        return;
+    }
+
+    $conversationId = getOrCreateConversation($pid, $otherPid);
+    $count = getUnreadCount($conversationId, $pid);
+
+    echo json_encode(['success' => true, 'unreadCount' => $count]);
 }

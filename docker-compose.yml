@@ -9,7 +9,39 @@ services:
       - ./data:/var/www/data
     environment:
       - TZ=Asia/Shanghai
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_NAME=chat_app
+      - DB_USER=chat_user
+      - DB_PASSWORD=chat_password
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
     command: >
       bash -c "php /var/www/html/websocket.php &
       apache2-foreground"
+
+  db:
+    image: mysql:8.0
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=root_password
+      - MYSQL_DATABASE=chat_app
+      - MYSQL_USER=chat_user
+      - MYSQL_PASSWORD=chat_password
+      - TZ=Asia/Shanghai
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "chat_user", "-pchat_password"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  mysql_data:

@@ -945,6 +945,39 @@ body {
     text-align: right;
 }
 
+.message-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 5px;
+}
+
+.message.sent .message-meta {
+    justify-content: flex-end;
+}
+
+.message-status {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 8px;
+    font-weight: 500;
+}
+
+.message-status.status-sent {
+    color: var(--text-muted);
+    background: transparent;
+}
+
+.message-status.status-delivered {
+    color: var(--text-muted);
+    background: transparent;
+}
+
+.message-status.status-read {
+    color: var(--primary-light);
+    background: transparent;
+}
+
 /* 退出登录按钮 */
 .logout-btn {
     background: rgba(255, 255, 255, 0.2);

@@ -1,4 +1,3 @@
-// Global variables
 let currentUser = null;
 let myPid = null;
 let myNickname = null;
@@ -8,12 +7,10 @@ let userInfoCache = {};
 let ws = null;
 let reconnectTimer = null;
 let searchTimer = null;
-let offlineTimers = {}; // 存储用户离线定时器
-const OFFLINE_GRACE_PERIOD = 30000; // 30秒宽限期
+let offlineTimers = {};
+const OFFLINE_GRACE_PERIOD = 30000;
 
-// Initialize
 document.addEventListener('DOMContentLoaded', function() {
-    // 检查是否已登录
     const savedUser = localStorage.getItem('chatUser');
     if (savedUser) {
         currentUser = JSON.parse(savedUser);
@@ -21,19 +18,17 @@ document.addEventListener('DOMContentLoaded', function() {
         myNickname = currentUser.nickname;
         showChatInterface();
     }
-    
+
     window.addEventListener('beforeunload', function() {
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.close();
         }
-        // 清除所有离线定时器
         Object.keys(offlineTimers).forEach(function(pid) {
             clearTimeout(offlineTimers[pid]);
         });
         offlineTimers = {};
     });
-    
-    // 点击外部关闭搜索结果
+
     document.addEventListener('click', function(e) {
         if (!e.target.closest('.new-chat')) {
             hideSearchResults();
@@ -41,28 +36,25 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-// 显示登录表单
 function showLogin() {
     document.getElementById('loginForm').style.display = 'block';
     document.getElementById('registerForm').style.display = 'none';
 }
 
-// 显示注册表单
 function showRegister() {
     document.getElementById('loginForm').style.display = 'none';
     document.getElementById('registerForm').style.display = 'block';
 }
 
-// 登录
 async function doLogin() {
     const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value;
-    
+
     if (!username || !password) {
         showToast('请输入用户名和密码', 'error');
         return;
     }
-    
+
     try {
         const response = await fetch('api.php', {
             method: 'POST',
@@ -73,9 +65,9 @@ async function doLogin() {
                 password: password
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             currentUser = data.user;
             myPid = data.user.pid;
@@ -91,17 +83,16 @@ async function doLogin() {
     }
 }
 
-// 注册
 async function doRegister() {
     const username = document.getElementById('regUsername').value.trim();
     const nickname = document.getElementById('regNickname').value.trim();
     const password = document.getElementById('regPassword').value;
-    
+
     if (!username || !nickname || !password) {
         showToast('请填写完整信息', 'error');
         return;
     }
-    
+
     try {
         const response = await fetch('api.php', {
             method: 'POST',
@@ -113,9 +104,9 @@ async function doRegister() {
                 password: password
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             showToast('注册成功，请登录', 'success');
             document.getElementById('loginUsername').value = username;
@@ -128,85 +119,110 @@ async function doRegister() {
     }
 }
 
-// 退出登录
-function doLogout() {
+async function doLogout() {
+    if (myPid) {
+        try {
+            await fetch(`api.php?action=logout&pid=${myPid}`);
+        } catch (e) {
+            console.error('Logout API error:', e);
+        }
+    }
+
     localStorage.removeItem('chatUser');
     currentUser = null;
     myPid = null;
     myNickname = null;
     currentChatPid = null;
-    
+    chats = {};
+    userInfoCache = {};
+
     if (ws) {
         ws.close();
         ws = null;
     }
-    
+
     document.getElementById('chatContainer').style.display = 'none';
     document.getElementById('authContainer').style.display = 'flex';
-    
-    // 清空表单
+
     document.getElementById('loginUsername').value = '';
     document.getElementById('loginPassword').value = '';
     document.getElementById('regUsername').value = '';
     document.getElementById('regNickname').value = '';
     document.getElementById('regPassword').value = '';
-    
+
     showToast('已退出登录', 'success');
 }
 
-// 显示聊天界面
-function showChatInterface() {
+async function showChatInterface() {
     document.getElementById('authContainer').style.display = 'none';
     document.getElementById('chatContainer').style.display = 'flex';
-    
+
     document.getElementById('myNickname').textContent = myNickname;
     document.getElementById('myPid').textContent = myPid;
-    
-    // 加载历史聊天记录
-    loadChatHistory();
-    
+
+    await loadConversations();
     connectWebSocket();
-    updateChatList();
 }
 
-// 保存聊天历史到本地存储
-function saveChatHistory() {
-    const history = {
-        chats: chats,
-        userInfoCache: userInfoCache
-    };
-    localStorage.setItem('chatHistory', JSON.stringify(history));
-}
+async function loadConversations() {
+    try {
+        const response = await fetch(`api.php?action=getConversations&pid=${myPid}`);
+        const data = await response.json();
 
-// 从本地存储加载聊天历史
-function loadChatHistory() {
-    const saved = localStorage.getItem('chatHistory');
-    if (saved) {
-        try {
-            const history = JSON.parse(saved);
-            chats = history.chats || {};
-            userInfoCache = history.userInfoCache || {};
-            
-            // 清除在线状态，需要重新检查
-            Object.keys(chats).forEach(pid => {
-                chats[pid].online = false;
-            });
-        } catch (e) {
+        if (data.success && data.conversations) {
             chats = {};
             userInfoCache = {};
+
+            for (const conv of data.conversations) {
+                const otherPid = conv.other_pid;
+                userInfoCache[otherPid] = {
+                    pid: otherPid,
+                    nickname: conv.other_nickname,
+                    username: conv.other_username,
+                    online: conv.is_online
+                };
+
+                const messages = await loadConversationMessages(otherPid);
+
+                chats[otherPid] = {
+                    messages: messages,
+                    unread: conv.unread_count || 0,
+                    lastMessage: conv.last_message || '',
+                    lastTime: conv.last_time_timestamp || null,
+                    online: conv.is_online,
+                    conversationId: conv.conversation_id
+                };
+            }
+
+            updateChatList();
         }
+    } catch (e) {
+        console.error('Error loading conversations:', e);
+        showToast('加载会话失败', 'error');
     }
 }
 
-// 搜索输入处理
+async function loadConversationMessages(otherPid) {
+    try {
+        const response = await fetch(`api.php?action=getConversationMessages&pid=${myPid}&otherPid=${otherPid}`);
+        const data = await response.json();
+
+        if (data.success && data.messages) {
+            return data.messages;
+        }
+    } catch (e) {
+        console.error('Error loading messages:', e);
+    }
+    return [];
+}
+
 function handleSearchInput(event) {
     const keyword = event.target.value.trim();
-    
-    // 防抖
+
     if (searchTimer) {
         clearTimeout(searchTimer);
     }
-    
+
     if (keyword.length > 0) {
         searchTimer = setTimeout(() => {
             doSearch();
@@ -216,7 +232,6 @@ function handleSearchInput(event) {
     }
 }
 
-// 搜索按键处理
 function handleSearchKeyPress(event) {
     if (event.key === 'Enter') {
         event.preventDefault();
@@ -224,26 +239,24 @@ function handleSearchKeyPress(event) {
     }
 }
 
-// 搜索用户
 async function doSearch() {
     const keyword = document.getElementById('searchInput').value.trim();
-    
+
     if (!keyword) {
         hideSearchResults();
         return;
     }
-    
+
     if (keyword === myPid || keyword === currentUser.username) {
         showToast('不能和自己聊天', 'error');
         return;
     }
-    
+
     try {
-        const response = await fetch(`api.php?action=search&keyword=${encodeURIComponent(keyword)}`);
+        const response = await fetch(`api.php?action=search&keyword=${encodeURIComponent(keyword)}&myPid=${myPid}`);
         const data = await response.json();
-        
+
         if (data.success && data.users.length > 0) {
-            // 过滤掉自己
             const users = data.users.filter(u => u.pid !== myPid);
             showSearchResults(users);
         } else {
@@ -254,21 +267,19 @@ async function doSearch() {
     }
 }
 
-// 显示搜索结果
 function showSearchResults(users) {
     const container = document.getElementById('searchResults');
-    
+
     if (users.length === 0) {
         container.innerHTML = '<div class="search-result-item empty">未找到相关用户</div>';
         container.style.display = 'block';
         return;
     }
-    
-    // 缓存用户信息
+
     users.forEach(user => {
         userInfoCache[user.pid] = user;
     });
-    
+
     container.innerHTML = users.map(user => {
         const onlineClass = user.online ? 'online' : 'offline';
         const matchLabel = {
@@ -276,7 +287,7 @@ function showSearchResults(users) {
             'username': '用户名',
             'nickname': '昵称'
         }[user.matchType] || '';
-        
+
         return `<div class="search-result-item" onclick="selectSearchResult('${user.pid}')">
             <div class="avatar small">
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg>
@@ -288,63 +299,61 @@ function showSearchResults(users) {
             <div class="result-pid">${user.pid.substring(0, 8)}...</div>
         </div>`;
     }).join('');
-    
+
     container.style.display = 'block';
 }
 
-// 隐藏搜索结果
 function hideSearchResults() {
     document.getElementById('searchResults').style.display = 'none';
 }
 
-// 选择搜索结果
 function selectSearchResult(pid) {
     hideSearchResults();
     document.getElementById('searchInput').value = '';
     startChatWithPid(pid);
 }
 
-// 开始聊天
-function startChatWithPid(pid) {
+async function startChatWithPid(pid) {
     if (pid === myPid) {
         showToast('不能和自己聊天', 'error');
         return;
     }
-    
+
     if (!chats[pid]) {
+        const messages = await loadConversationMessages(pid);
+        const unreadCount = await getUnreadCount(pid);
+
         chats[pid] = {
-            messages: [],
-            unread: 0,
-            lastMessage: '',
-            lastTime: null,
+            messages: messages,
+            unread: unreadCount,
+            lastMessage: messages.length > 0 ? messages[messages.length - 1].text : '',
+            lastTime: messages.length > 0 ? messages[messages.length - 1].time : null,
             online: false
         };
     }
-    
-    // 获取用户信息
+
     if (!userInfoCache[pid]) {
-        fetch(`api.php?action=getUser&pid=${pid}`)
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    userInfoCache[pid] = data.user;
-                    chats[pid].online = data.user.online;
-                    updateChatList();
-                    saveChatHistory();
-                }
-            });
+        try {
+            const response = await fetch(`api.php?action=getUser&pid=${pid}`);
+            const data = await response.json();
+            if (data.success) {
+                userInfoCache[pid] = data.user;
+                chats[pid].online = data.user.online;
+                updateChatList();
+            }
+        } catch (e) {
+            console.error('Error fetching user info:', e);
+        }
     }
-    
+
     openChat(pid);
     updateChatList();
-    saveChatHistory();
 }
 
-// Connect WebSocket
 function connectWebSocket() {
     const wsUrl = 'ws://' + window.location.hostname + ':9000';
     ws = new WebSocket(wsUrl);
-    
+
     ws.onopen = function() {
         console.log('WebSocket connected');
         if (myPid) {
@@ -354,29 +363,27 @@ function connectWebSocket() {
             }));
         }
     };
-    
+
     ws.onmessage = function(event) {
         handleWebSocketMessage(JSON.parse(event.data));
     };
-    
+
     ws.onerror = function(error) {
         console.error('WebSocket error:', error);
     };
-    
+
     ws.onclose = function() {
         console.log('WebSocket closed, reconnecting...');
         reconnectTimer = setTimeout(connectWebSocket, 5000);
     };
 }
 
-// Handle WebSocket message
 function handleWebSocketMessage(data) {
     var type = data.type;
-    
+
     switch (type) {
         case 'registered':
             console.log('Registered successfully');
-            // 检查所有聊天用户的在线状态
             Object.keys(chats).forEach(pid => {
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({
@@ -386,94 +393,144 @@ function handleWebSocketMessage(data) {
                 }
             });
             break;
-            
+
         case 'message':
-            var chatPid = data.from;
-            
-            if (!chats[chatPid]) {
-                chats[chatPid] = { messages: [], unread: 0, lastMessage: '', lastTime: null, online: false };
-            }
-            
-            var msg = {
-                from: data.from,
-                to: data.to,
-                text: data.text,
-                time: data.time
-            };
-            
-            chats[chatPid].messages.push(msg);
-            chats[chatPid].lastMessage = data.text;
-            chats[chatPid].lastTime = data.time;
-            
-            if (chatPid !== currentChatPid) {
-                chats[chatPid].unread++;
-            }
-            
-            // 获取发送者信息
-            if (!userInfoCache[chatPid]) {
-                fetch(`api.php?action=getUser&pid=${chatPid}`)
-                    .then(r => r.json())
-                    .then(result => {
-                        if (result.success) {
-                            userInfoCache[chatPid] = result.user;
-                            updateChatList();
-                        }
-                    });
-            }
-            
-            updateChatList();
-            saveChatHistory();
-            
-            if (currentChatPid === chatPid) {
-                renderMessages();
-            }
+            handleIncomingMessage(data);
             break;
-            
+
         case 'sent':
-            if (!data.online) {
-                // 检查是否在30秒缓冲期内
-                if (offlineTimers[currentChatPid]) {
-                    // 在缓冲期内，不立即提示，只显示临时提示
-                    showToast('对方暂时离线，消息可能无法送达', 'warning');
-                } else {
-                    // 已确认离线，显示无法送达
-                    var systemMsg = {
-                        type: 'system',
-                        text: '对方已经离开，消息无法送达',
-                        time: Date.now()
-                    };
-                    if (currentChatPid && chats[currentChatPid]) {
-                        chats[currentChatPid].messages.push(systemMsg);
-                        renderMessages();
-                    }
-                    showToast('对方已经离开', 'error');
-                }
-            }
+            handleSentConfirmation(data);
             break;
-            
+
+        case 'messagesRead':
+            handleMessagesRead(data);
+            break;
+
         case 'userStatus':
             updateUserStatus(data.pid, data.online);
             break;
-            
+
         case 'status':
             updateUserStatus(data.pid, data.online);
             break;
-            
+
         case 'pong':
             break;
     }
 }
 
-// Update user status
+function handleIncomingMessage(data) {
+    var chatPid = data.from;
+
+    if (!chats[chatPid]) {
+        chats[chatPid] = {
+            messages: [],
+            unread: 0,
+            lastMessage: '',
+            lastTime: null,
+            online: false
+        };
+    }
+
+    var msg = {
+        id: data.messageId,
+        from: data.from,
+        to: data.to,
+        text: data.text,
+        time: data.time,
+        status: data.status || 'delivered'
+    };
+
+    chats[chatPid].messages.push(msg);
+    chats[chatPid].lastMessage = data.text;
+    chats[chatPid].lastTime = data.time;
+
+    if (chatPid !== currentChatPid) {
+        chats[chatPid].unread++;
+    } else {
+        markAsRead(chatPid);
+    }
+
+    if (!userInfoCache[chatPid]) {
+        fetch(`api.php?action=getUser&pid=${chatPid}`)
+            .then(r => r.json())
+            .then(result => {
+                if (result.success) {
+                    userInfoCache[chatPid] = result.user;
+                    updateChatList();
+                }
+            });
+    }
+
+    updateChatList();
+
+    if (currentChatPid === chatPid) {
+        renderMessages();
+    }
+}
+
+function handleSentConfirmation(data) {
+    const toPid = data.to;
+    const messageId = data.messageId;
+
+    if (toPid && chats[toPid]) {
+        for (let i = chats[toPid].messages.length - 1; i >= 0; i--) {
+            const msg = chats[toPid].messages[i];
+            if (msg.from === myPid && !msg.id && !msg.status) {
+                msg.id = messageId;
+                msg.status = data.status || 'sent';
+                break;
+            }
+        }
+
+        if (currentChatPid === toPid) {
+            renderMessages();
+        }
+    }
+
+    if (!data.online) {
+        if (offlineTimers[currentChatPid]) {
+            showToast('对方暂时离线，消息可能无法送达', 'warning');
+        } else {
+            var systemMsg = {
+                type: 'system',
+                text: '对方已经离开，消息无法送达',
+                time: Date.now()
+            };
+            if (currentChatPid && chats[currentChatPid]) {
+                chats[currentChatPid].messages.push(systemMsg);
+                renderMessages();
+            }
+            showToast('对方已经离开', 'error');
+        }
+    }
+}
+
+function handleMessagesRead(data) {
+    const readerPid = data.readerPid;
+    if (chats[readerPid]) {
+        chats[readerPid].messages.forEach(msg => {
+            if (msg.from === myPid && msg.status !== 'read') {
+                msg.status = 'read';
+            }
+        });
+
+        if (currentChatPid === readerPid) {
+            renderMessages();
+        }
+        updateChatList();
+    }
+}
+
 function updateUserStatus(pid, online) {
     if (chats[pid]) {
         const wasOnline = chats[pid].online;
         chats[pid].online = online;
-        
+
         if (userInfoCache[pid]) {
             userInfoCache[pid].online = online;
         }
-        
+
         if (pid === currentChatPid) {
             var statusEl = document.getElementById('onlineStatus');
             if (statusEl) {
@@ -481,14 +538,12 @@ function updateUserStatus(pid, online) {
                 statusEl.style.color = online ? 'var(--success-color)' : 'var(--text-muted)';
             }
         }
-        
+
         if (wasOnline && !online) {
-            // 用户从在线变为离线，启动30秒缓冲定时器
             if (offlineTimers[pid]) {
                 clearTimeout(offlineTimers[pid]);
             }
             offlineTimers[pid] = setTimeout(function() {
-                // 30秒后检查用户是否仍离线
                 if (chats[pid] && !chats[pid].online) {
                     var systemMsg = {
                         type: 'system',
@@ -499,24 +554,20 @@ function updateUserStatus(pid, online) {
                     if (pid === currentChatPid) {
                         renderMessages();
                     }
-                    saveChatHistory();
                 }
                 delete offlineTimers[pid];
             }, OFFLINE_GRACE_PERIOD);
         } else if (!wasOnline && online) {
-            // 用户从离线变为在线，清除缓冲定时器
             if (offlineTimers[pid]) {
                 clearTimeout(offlineTimers[pid]);
                 delete offlineTimers[pid];
             }
         }
-        
+
         updateChatList();
-        saveChatHistory();
     }
 }
 
-// 获取用户显示名称
 function getUserDisplayName(pid) {
     if (userInfoCache[pid]) {
         return userInfoCache[pid].nickname;
@@ -524,7 +575,6 @@ function getUserDisplayName(pid) {
     return pid.substring(0, 8) + '...';
 }
 
-// Copy PID
 function copyPid() {
     navigator.clipboard.writeText(myPid).then(function() {
         showToast('PID已复制到剪贴板', 'success');
@@ -539,29 +589,28 @@ function copyPid() {
     });
 }
 
-// Update chat list
 function updateChatList() {
     var chatList = document.getElementById('chatList');
     var pids = Object.keys(chats);
-    
+
     if (pids.length === 0) {
         chatList.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="currentColor" width="48" height="48"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg><p>暂无聊天</p><span>搜索用户开始聊天</span></div>';
         return;
     }
-    
+
     pids.sort(function(a, b) {
         var timeA = chats[a].lastTime || 0;
         var timeB = chats[b].lastTime || 0;
         return timeB - timeA;
     });
-    
+
     chatList.innerHTML = pids.map(function(pid) {
         var chat = chats[pid];
         var isActive = pid === currentChatPid;
         var timeStr = chat.lastTime ? formatTime(chat.lastTime) : '';
         var displayName = getUserDisplayName(pid);
         var onlineClass = chat.online ? 'status-online' : 'status-offline';
-        
+
         return '<div class="chat-item ' + (isActive ? 'active' : '') + '" onclick="openChat(\'' + pid + '\')">' +
             '<div class="avatar small ' + onlineClass + '"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg></div>' +
             '<div class="chat-item-info">' +
@@ -576,39 +625,36 @@ function updateChatList() {
     }).join('');
 }
 
-// Open chat window
-function openChat(pid) {
+async function openChat(pid) {
     currentChatPid = pid;
-    
+
     if (chats[pid]) {
         chats[pid].unread = 0;
     }
-    
+
     document.getElementById('chatPlaceholder').style.display = 'none';
     document.getElementById('chatWindow').style.display = 'flex';
     document.getElementById('targetNameDisplay').textContent = getUserDisplayName(pid);
-    
-    // 更新在线状态显示
+
     var statusEl = document.getElementById('onlineStatus');
     var online = chats[pid] ? chats[pid].online : false;
     statusEl.textContent = online ? '在线' : '离线';
     statusEl.style.color = online ? 'var(--success-color)' : 'var(--text-muted)';
-    
-    // 检查在线状态
+
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
             type: 'checkStatus',
             pid: pid
         }));
     }
-    
+
     renderMessages();
     updateChatList();
-    saveChatHistory();
     document.getElementById('messageInput').focus();
+
+    await markAsRead(pid);
 }
 
-// Close chat window
 function closeChat() {
     currentChatPid = null;
     document.getElementById('chatPlaceholder').style.display = 'flex';
@@ -616,77 +662,103 @@ function closeChat() {
     updateChatList();
 }
 
-// Render messages
 function renderMessages() {
     var container = document.getElementById('messages');
-    
+
     if (!currentChatPid || !chats[currentChatPid]) {
         container.innerHTML = '';
         return;
     }
-    
+
     var messages = chats[currentChatPid].messages;
     var displayName = getUserDisplayName(currentChatPid);
-    
+
     if (messages.length === 0) {
         container.innerHTML = '<div class="system-message"><span>开始与 ' + escapeHtml(displayName) + ' 聊天</span></div>';
         return;
     }
-    
+
     container.innerHTML = messages.map(function(msg) {
         if (msg.type === 'system') {
             return '<div class="system-message warning"><span>' + escapeHtml(msg.text) + '</span></div>';
         }
-        
+
         var isSent = msg.from === myPid;
         var timeStr = formatTime(msg.time);
         var senderName = isSent ? myNickname : getUserDisplayName(msg.from);
-        
+        var statusHtml = '';
+
+        if (isSent && msg.status) {
+            var statusText = '';
+            var statusClass = '';
+            if (msg.status === 'sent') {
+                statusText = '已发送';
+                statusClass = 'status-sent';
+            } else if (msg.status === 'delivered') {
+                statusText = '已送达';
+                statusClass = 'status-delivered';
+            } else if (msg.status === 'read') {
+                statusText = '已读';
+                statusClass = 'status-read';
+            }
+            statusHtml = `<span class="message-status ${statusClass}">${statusText}</span>`;
+        }
+
         return '<div class="message ' + (isSent ? 'sent' : 'received') + '">' +
             '<div class="avatar"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg></div>' +
             '<div class="message-content">' +
             '<div class="message-sender">' + escapeHtml(senderName) + '</div>' +
             '<div class="message-bubble">' + escapeHtml(msg.text) + '</div>' +
+            '<div class="message-meta">' +
             '<span class="message-time">' + timeStr + '</span>' +
+            statusHtml +
+            '</div>' +
             '</div>' +
             '</div>';
     }).join('');
-    
+
     container.scrollTop = container.scrollHeight;
 }
 
-// Send message
 function sendMessage() {
     var input = document.getElementById('messageInput');
     var text = input.value.trim();
-    
+
     if (!text || !currentChatPid) return;
-    
+
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         showToast('连接已断开，请刷新页面', 'error');
         return;
     }
-    
+
     var message = {
         from: myPid,
         to: currentChatPid,
         text: text,
         time: Date.now()
     };
-    
+
     if (!chats[currentChatPid]) {
         chats[currentChatPid] = { messages: [], unread: 0, lastMessage: '', lastTime: null, online: false };
     }
-    chats[currentChatPid].messages.push(message);
+
+    var tempMsg = {
+        from: message.from,
+        to: message.to,
+        text: message.text,
+        time: message.time,
+        status: 'sent'
+    };
+
+    chats[currentChatPid].messages.push(tempMsg);
     chats[currentChatPid].lastMessage = text;
     chats[currentChatPid].lastTime = message.time;
-    
+
     input.value = '';
-    
+
     renderMessages();
     updateChatList();
-    saveChatHistory();
-    
+
     ws.send(JSON.stringify({
         type: 'send',
         from: message.from,
@@ -696,19 +768,67 @@ function sendMessage() {
     }));
 }
 
-// Handle enter key
+async function markAsRead(otherPid) {
+    if (!myPid || !otherPid) return;
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            type: 'markAsRead',
+            userPid: myPid,
+            otherPid: otherPid
+        }));
+    }
+
+    try {
+        const response = await fetch('api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'markAsRead',
+                userPid: myPid,
+                otherPid: otherPid
+            })
+        });
+        const data = await response.json();
+
+        if (data.success && chats[otherPid]) {
+            chats[otherPid].messages.forEach(msg => {
+                if (msg.to === myPid && msg.status !== 'read') {
+                    msg.status = 'read';
+                }
+            });
+            chats[otherPid].unread = 0;
+            updateChatList();
+            if (currentChatPid === otherPid) {
+                renderMessages();
+            }
+        }
+    } catch (e) {
+        console.error('Error marking as read:', e);
+    }
+}
+
+async function getUnreadCount(otherPid) {
+    try {
+        const response = await fetch(`api.php?action=getUnreadCount&pid=${myPid}&otherPid=${otherPid}`);
+        const data = await response.json();
+        return data.success ? data.unreadCount : 0;
+    } catch (e) {
+        return 0;
+    }
+}
+
 function handleKeyPress(event) {
     if (event.key === 'Enter') {
         sendMessage();
     }
 }
 
-// Format time
 function formatTime(timestamp) {
     var date = new Date(timestamp);
     var now = new Date();
     var diff = now - date;
-    
+
     if (diff < 60000) {
         return '刚刚';
     } else if (diff < 3600000) {
@@ -720,21 +840,19 @@ function formatTime(timestamp) {
     }
 }
 
-// HTML escape
 function escapeHtml(text) {
     var div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }
 
-// Show toast
 function showToast(message, type) {
     var toast = document.getElementById('toast');
     toast.textContent = message;
     toast.className = 'toast ' + (type || '');
-    
+
     setTimeout(function() { toast.classList.add('show'); }, 10);
-    
+
     setTimeout(function() {
         toast.classList.remove('show');
     }, 3000);

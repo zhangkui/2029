@@ -337,3 +337,67 @@ function searchUsers($keyword, $excludePid = null) {
 
     return $db->fetchAll($sql, $params);
 }
+
+function generateToken() {
+    return bin2hex(random_bytes(32));
+}
+
+function createUserToken($userPid, $userAgent = '', $ipAddress = '') {
+    $db = getDb();
+    $token = generateToken();
+    
+    $expiresAt = date('Y-m-d H:i:s', time() + (7 * 24 * 60 * 60));
+    
+    $db->execute(
+        "INSERT INTO user_tokens (user_pid, token, user_agent, ip_address, expires_at) 
+         VALUES (?, ?, ?, ?, ?)",
+        [$userPid, $token, substr($userAgent, 0, 255), substr($ipAddress, 0, 45), $expiresAt]
+    );
+    
+    return $token;
+}
+
+function validateToken($token) {
+    $db = getDb();
+    
+    $result = $db->fetchOne(
+        "SELECT ut.user_pid, u.username, u.nickname, ut.expires_at 
+         FROM user_tokens ut 
+         INNER JOIN users u ON ut.user_pid = u.pid 
+         WHERE ut.token = ? AND (ut.expires_at IS NULL OR ut.expires_at > NOW())",
+        [$token]
+    );
+    
+    if ($result) {
+        return [
+            'pid' => $result['user_pid'],
+            'username' => $result['username'],
+            'nickname' => $result['nickname']
+        ];
+    }
+    
+    return null;
+}
+
+function deleteToken($token) {
+    $db = getDb();
+    return $db->execute(
+        "DELETE FROM user_tokens WHERE token = ?",
+        [$token]
+    );
+}
+
+function deleteAllUserTokens($userPid) {
+    $db = getDb();
+    return $db->execute(
+        "DELETE FROM user_tokens WHERE user_pid = ?",
+        [$userPid]
+    );
+}
+
+function cleanupExpiredTokens() {
+    $db = getDb();
+    return $db->execute(
+        "DELETE FROM user_tokens WHERE expires_at IS NOT NULL AND expires_at <= NOW()"
+    );
+}

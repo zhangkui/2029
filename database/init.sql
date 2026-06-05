@@ -55,3 +55,17 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     INDEX idx_user_pid (user_pid),
     INDEX idx_online (is_online)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS user_tokens (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_pid CHAR(32) NOT NULL,
+    token VARCHAR(64) NOT NULL UNIQUE,
+    user_agent VARCHAR(255),
+    ip_address VARCHAR(45),
+    expires_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_pid) REFERENCES users(pid) ON DELETE CASCADE,
+    INDEX idx_token (token),
+    INDEX idx_user_pid (user_pid),
+    INDEX idx_expires_at (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

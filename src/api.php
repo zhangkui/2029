@@ -5,14 +5,81 @@ require_once 'db.php';
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit(0);
 }
 
+$currentUser = null;
+
+function getAuthToken() {
+    $headers = getallheaders();
+    
+    if (isset($headers['Authorization'])) {
+        $authHeader = $headers['Authorization'];
+        if (preg_match('/Bearer\s+(.*)/i', $authHeader, $matches)) {
+            return $matches[1];
+        }
+    }
+    
+    if (isset($_GET['token'])) {
+        return $_GET['token'];
+    }
+    
+    $input = json_decode(file_get_contents('php://input'), true);
+    if (isset($input['token'])) {
+        return $input['token'];
+    }
+    
+    return null;
+}
+
+function authenticate() {
+    global $currentUser;
+    
+    $token = getAuthToken();
+    if (!$token) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'error' => '未登录，请先登录']);
+        exit;
+    }
+    
+    $user = validateToken($token);
+    if (!$user) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'error' => '登录已过期，请重新登录']);
+        exit;
+    }
+    
+    $currentUser = $user;
+    return $user;
+}
+
+function verifyOwnership($requestedPid) {
+    global $currentUser;
+    if (!$currentUser) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'error' => '未登录']);
+        exit;
+    }
+    if ($currentUser['pid'] !== $requestedPid) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => '无权访问他人数据']);
+        exit;
+    }
+    return true;
+}
+
 try {
+    cleanupExpiredTokens();
+    
     $action = $_GET['action'] ?? '';
+    $publicActions = ['userLogin', 'userRegister'];
+    
+    if (!in_array($action, $publicActions)) {
+        authenticate();
+    }
 
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $input = json_decode(file_get_contents('php://input'), true);
@@ -39,6 +106,9 @@ try {
                 break;
             case 'updateMessageStatus':
                 handleUpdateMessageStatus($input);
+                break;
+            case 'logout':
+                handleLogoutPost($input);
                 break;
             default:
                 echo json_encode(['success' => false, 'error' => 'Unknown action']);
@@ -73,6 +143,9 @@ try {
             break;
         case 'getUnreadCount':
             handleGetUnreadCount();
+            break;
+        case 'verifyToken':
+            handleVerifyToken();
             break;
         default:
             echo json_encode(['success' => false, 'error' => 'Unknown action']);
@@ -131,18 +204,34 @@ function handleUserLogin($input) {
         return;
     }
 
+    $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    $ipAddress = $_SERVER['REMOTE_ADDR'] ?? '';
+    $token = createUserToken($user['pid'], $userAgent, $ipAddress);
+
     echo json_encode([
         'success' => true,
         'user' => [
             'username' => $user['username'],
             'nickname' => $user['nickname'],
             'pid' => $user['pid']
-        ]
+        ],
+        'token' => $token
+    ]);
+}
+
+function handleVerifyToken() {
+    global $currentUser;
+    echo json_encode([
+        'success' => true,
+        'user' => $currentUser
     ]);
 }
 
 function handleRegister($input) {
+    global $currentUser;
     $pid = $input['pid'] ?? '';
+    verifyOwnership($pid);
+    
     if (strlen($pid) === 32) {
         updateUserActivity($pid, true);
         echo json_encode(['success' => true]);
@@ -152,11 +241,15 @@ function handleRegister($input) {
 }
 
 function handleSendMessage($input) {
+    global $currentUser;
     $message = $input['message'] ?? null;
+    
     if (!$message || !isset($message['to']) || !isset($message['from']) || !isset($message['text'])) {
         echo json_encode(['success' => false, 'error' => 'Invalid message']);
         return;
     }
+    
+    verifyOwnership($message['from']);
 
     $recipientOnline = isUserOnline($message['to']);
     updateUserActivity($message['from']);
@@ -174,6 +267,7 @@ function handleSendMessage($input) {
 }
 
 function handleSaveMessage($input) {
+    global $currentUser;
     $fromPid = $input['from'] ?? '';
     $toPid = $input['to'] ?? '';
     $text = $input['text'] ?? '';
@@ -183,6 +277,8 @@ function handleSaveMessage($input) {
         echo json_encode(['success' => false, 'error' => 'Invalid parameters']);
         return;
     }
+    
+    verifyOwnership($fromPid);
 
     $conversationId = getOrCreateConversation($fromPid, $toPid);
     $messageId = saveMessage($conversationId, $fromPid, $toPid, $text, $status);
@@ -194,6 +290,7 @@ function handleSaveMessage($input) {
 }
 
 function handleMarkAsRead($input) {
+    global $currentUser;
     $userPid = $input['userPid'] ?? '';
     $otherPid = $input['otherPid'] ?? '';
 
@@ -201,6 +298,8 @@ function handleMarkAsRead($input) {
         echo json_encode(['success' => false, 'error' => 'Invalid parameters']);
         return;
     }
+    
+    verifyOwnership($userPid);
 
     $conversationId = getOrCreateConversation($userPid, $otherPid);
 
@@ -232,8 +331,9 @@ function handleUpdateMessageStatus($input) {
 }
 
 function handleSearch() {
+    global $currentUser;
     $keyword = trim($_GET['keyword'] ?? '');
-    $myPid = $_GET['myPid'] ?? '';
+    $myPid = $currentUser['pid'];
 
     if (strlen($keyword) < 1) {
         echo json_encode(['success' => false, 'error' => '请输入搜索关键词']);
@@ -269,7 +369,10 @@ function handleGetUser() {
 }
 
 function handlePoll() {
+    global $currentUser;
     $pid = $_GET['pid'] ?? '';
+    verifyOwnership($pid);
+    
     if (strlen($pid) !== 32) {
         echo json_encode(['success' => false, 'error' => 'Invalid PID']);
         return;
@@ -280,13 +383,26 @@ function handlePoll() {
 }
 
 function handleLogout() {
-    $pid = $_GET['pid'] ?? '';
-    if (strlen($pid) !== 32) {
-        echo json_encode(['success' => false, 'error' => 'Invalid PID']);
-        return;
+    global $currentUser;
+    $token = getAuthToken();
+    if ($token) {
+        deleteToken($token);
     }
+    echo json_encode(['success' => true]);
+}
 
-    setUserOffline($pid);
+function handleLogoutPost($input) {
+    global $currentUser;
+    $token = getAuthToken();
+    if ($token) {
+        deleteToken($token);
+    }
+    
+    $pid = $input['pid'] ?? '';
+    if ($pid && $pid === $currentUser['pid']) {
+        setUserOffline($pid);
+    }
+    
     echo json_encode(['success' => true]);
 }
 
@@ -302,7 +418,10 @@ function handleCheckStatus() {
 }
 
 function handleGetConversations() {
+    global $currentUser;
     $pid = $_GET['pid'] ?? '';
+    verifyOwnership($pid);
+    
     if (strlen($pid) !== 32) {
         echo json_encode(['success' => false, 'error' => 'Invalid PID']);
         return;
@@ -320,6 +439,7 @@ function handleGetConversations() {
 }
 
 function handleGetConversationMessages() {
+    global $currentUser;
     $pid = $_GET['pid'] ?? '';
     $otherPid = $_GET['otherPid'] ?? '';
     $limit = (int)($_GET['limit'] ?? 100);
@@ -329,6 +449,8 @@ function handleGetConversationMessages() {
         echo json_encode(['success' => false, 'error' => 'Invalid PID']);
         return;
     }
+    
+    verifyOwnership($pid);
 
     $conversationId = getOrCreateConversation($pid, $otherPid);
     $messages = getConversationMessages($conversationId, $limit, $offset);
@@ -343,6 +465,7 @@ function handleGetConversationMessages() {
 }
 
 function handleGetOrCreateConversation() {
+    global $currentUser;
     $pid1 = $_GET['pid1'] ?? '';
     $pid2 = $_GET['pid2'] ?? '';
 
@@ -350,12 +473,15 @@ function handleGetOrCreateConversation() {
         echo json_encode(['success' => false, 'error' => 'Invalid PID']);
         return;
     }
+    
+    verifyOwnership($pid1);
 
     $conversationId = getOrCreateConversation($pid1, $pid2);
     echo json_encode(['success' => true, 'conversationId' => $conversationId]);
 }
 
 function handleGetUnreadCount() {
+    global $currentUser;
     $pid = $_GET['pid'] ?? '';
     $otherPid = $_GET['otherPid'] ?? '';
 
@@ -363,6 +489,8 @@ function handleGetUnreadCount() {
         echo json_encode(['success' => false, 'error' => 'Invalid PID']);
         return;
     }
+    
+    verifyOwnership($pid);
 
     $conversationId = getOrCreateConversation($pid, $otherPid);
     $count = getUnreadCount($conversationId, $pid);

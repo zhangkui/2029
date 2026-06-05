@@ -1,6 +1,7 @@
 let currentUser = null;
 let myPid = null;
 let myNickname = null;
+let authToken = null;
 let currentChatPid = null;
 let chats = {};
 let userInfoCache = {};
@@ -8,15 +9,123 @@ let ws = null;
 let reconnectTimer = null;
 let searchTimer = null;
 let offlineTimers = {};
+let pendingMessages = {};
 const OFFLINE_GRACE_PERIOD = 30000;
 
-document.addEventListener('DOMContentLoaded', function() {
+async function apiRequest(action, options = {}) {
+    const headers = {
+        'Content-Type': 'application/json'
+    };
+    
+    if (authToken) {
+        headers['Authorization'] = 'Bearer ' + authToken;
+    }
+
+    const url = 'api.php?action=' + action + (authToken ? '&token=' + authToken : '');
+    
+    try {
+        const response = await fetch(url, {
+            headers: headers,
+            ...options
+        });
+
+        if (response.status === 401) {
+            handleAuthFailure();
+            return null;
+        }
+
+        const data = await response.json();
+        return data;
+    } catch (e) {
+        console.error('API request failed:', e);
+        return { success: false, error: '网络错误' };
+    }
+}
+
+async function apiPost(action, body = {}) {
+    return apiRequest(action, {
+        method: 'POST',
+        body: JSON.stringify({ ...body, token: authToken })
+    });
+}
+
+async function apiGet(action, params = {}) {
+    let queryString = '';
+    if (Object.keys(params).length > 0) {
+        queryString = '&' + new URLSearchParams(params).toString();
+    }
+    return apiRequest(action + queryString, {
+        method: 'GET'
+    });
+}
+
+function handleAuthFailure() {
+    showToast('登录已过期，请重新登录', 'error');
+    clearAuthData();
+    document.getElementById('chatContainer').style.display = 'none';
+    document.getElementById('authContainer').style.display = 'flex';
+}
+
+function saveAuthData(user, token) {
+    currentUser = user;
+    myPid = user.pid;
+    myNickname = user.nickname;
+    authToken = token;
+    
+    localStorage.setItem('chatUser', JSON.stringify(user));
+    localStorage.setItem('authToken', token);
+}
+
+function clearAuthData() {
+    currentUser = null;
+    myPid = null;
+    myNickname = null;
+    authToken = null;
+    currentChatPid = null;
+    chats = {};
+    userInfoCache = {};
+    pendingMessages = {};
+    
+    localStorage.removeItem('chatUser');
+    localStorage.removeItem('authToken');
+}
+
+async function verifyAndRestoreSession() {
+    const savedToken = localStorage.getItem('authToken');
     const savedUser = localStorage.getItem('chatUser');
-    if (savedUser) {
-        currentUser = JSON.parse(savedUser);
-        myPid = currentUser.pid;
-        myNickname = currentUser.nickname;
+    
+    if (!savedToken || !savedUser) {
+        return false;
+    }
+    
+    authToken = savedToken;
+    
+    try {
+        const result = await apiGet('verifyToken');
+        if (result && result.success) {
+            currentUser = result.user;
+            myPid = result.user.pid;
+            myNickname = result.user.nickname;
+            return true;
+        } else {
+            clearAuthData();
+            return false;
+        }
+    } catch (e) {
+        clearAuthData();
+        return false;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', async function() {
+    const sessionRestored = await verifyAndRestoreSession();
+    
+    if (sessionRestored) {
         showChatInterface();
+    } else {
+        clearAuthData();
+        document.getElementById('chatContainer').style.display = 'none';
+        document.getElementById('authContainer').style.display = 'flex';
     }
 
     window.addEventListener('beforeunload', function() {
@@ -55,31 +164,19 @@ async function doLogin() {
         return;
     }
 
-    try {
-        const response = await fetch('api.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                action: 'userLogin',
-                username: username,
-                password: password
-            })
-        });
+    const data = await apiPost('userLogin', {
+        username: username,
+        password: password
+    });
 
-        const data = await response.json();
+    if (!data) return;
 
-        if (data.success) {
-            currentUser = data.user;
-            myPid = data.user.pid;
-            myNickname = data.user.nickname;
-            localStorage.setItem('chatUser', JSON.stringify(data.user));
-            showToast('登录成功', 'success');
-            showChatInterface();
-        } else {
-            showToast(data.error || '登录失败', 'error');
-        }
-    } catch (e) {
-        showToast('网络错误，请重试', 'error');
+    if (data.success) {
+        saveAuthData(data.user, data.token);
+        showToast('登录成功', 'success');
+        showChatInterface();
+    } else {
+        showToast(data.error || '登录失败', 'error');
     }
 }
 
@@ -93,53 +190,34 @@ async function doRegister() {
         return;
     }
 
-    try {
-        const response = await fetch('api.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                action: 'userRegister',
-                username: username,
-                nickname: nickname,
-                password: password
-            })
-        });
+    const data = await apiPost('userRegister', {
+        username: username,
+        nickname: nickname,
+        password: password
+    });
 
-        const data = await response.json();
+    if (!data) return;
 
-        if (data.success) {
-            showToast('注册成功，请登录', 'success');
-            document.getElementById('loginUsername').value = username;
-            showLogin();
-        } else {
-            showToast(data.error || '注册失败', 'error');
-        }
-    } catch (e) {
-        showToast('网络错误，请重试', 'error');
+    if (data.success) {
+        showToast('注册成功，请登录', 'success');
+        document.getElementById('loginUsername').value = username;
+        showLogin();
+    } else {
+        showToast(data.error || '注册失败', 'error');
     }
 }
 
 async function doLogout() {
-    if (myPid) {
-        try {
-            await fetch(`api.php?action=logout&pid=${myPid}`);
-        } catch (e) {
-            console.error('Logout API error:', e);
-        }
+    if (authToken) {
+        await apiPost('logout', { pid: myPid });
     }
-
-    localStorage.removeItem('chatUser');
-    currentUser = null;
-    myPid = null;
-    myNickname = null;
-    currentChatPid = null;
-    chats = {};
-    userInfoCache = {};
 
     if (ws) {
         ws.close();
         ws = null;
     }
+
+    clearAuthData();
 
     document.getElementById('chatContainer').style.display = 'none';
     document.getElementById('authContainer').style.display = 'flex';
@@ -160,58 +238,64 @@ async function showChatInterface() {
     document.getElementById('myNickname').textContent = myNickname;
     document.getElementById('myPid').textContent = myPid;
 
-    await loadConversations();
+    await loadAllData();
     connectWebSocket();
 }
 
-async function loadConversations() {
-    try {
-        const response = await fetch(`api.php?action=getConversations&pid=${myPid}`);
-        const data = await response.json();
-
-        if (data.success && data.conversations) {
-            chats = {};
-            userInfoCache = {};
-
-            for (const conv of data.conversations) {
-                const otherPid = conv.other_pid;
-                userInfoCache[otherPid] = {
-                    pid: otherPid,
-                    nickname: conv.other_nickname,
-                    username: conv.other_username,
-                    online: conv.is_online
-                };
-
-                const messages = await loadConversationMessages(otherPid);
-
-                chats[otherPid] = {
-                    messages: messages,
-                    unread: conv.unread_count || 0,
-                    lastMessage: conv.last_message || '',
-                    lastTime: conv.last_time_timestamp || null,
-                    online: conv.is_online,
-                    conversationId: conv.conversation_id
-                };
-            }
-
-            updateChatList();
-        }
-    } catch (e) {
-        console.error('Error loading conversations:', e);
-        showToast('加载会话失败', 'error');
+async function loadAllData() {
+    await loadConversations();
+    if (currentChatPid && chats[currentChatPid]) {
+        const messages = await loadConversationMessages(currentChatPid);
+        chats[currentChatPid].messages = messages;
+        renderMessages();
     }
+    updateChatList();
+}
+
+async function loadConversations() {
+    const data = await apiGet('getConversations', { pid: myPid });
+    
+    if (!data || !data.success) {
+        showToast('加载会话失败', 'error');
+        return;
+    }
+
+    chats = {};
+    userInfoCache = {};
+    pendingMessages = {};
+
+    for (const conv of data.conversations) {
+        const otherPid = conv.other_pid;
+        userInfoCache[otherPid] = {
+            pid: otherPid,
+            nickname: conv.other_nickname,
+            username: conv.other_username,
+            online: conv.is_online
+        };
+
+        const messages = await loadConversationMessages(otherPid);
+
+        chats[otherPid] = {
+            messages: messages,
+            unread: conv.unread_count || 0,
+            lastMessage: conv.last_message || '',
+            lastTime: conv.last_time_timestamp || null,
+            online: conv.is_online,
+            conversationId: conv.conversation_id
+        };
+    }
+
+    updateChatList();
 }
 
 async function loadConversationMessages(otherPid) {
-    try {
-        const response = await fetch(`api.php?action=getConversationMessages&pid=${myPid}&otherPid=${otherPid}`);
-        const data = await response.json();
+    const data = await apiGet('getConversationMessages', {
+        pid: myPid,
+        otherPid: otherPid
+    });
 
-        if (data.success && data.messages) {
-            return data.messages;
-        }
-    } catch (e) {
-        console.error('Error loading messages:', e);
+    if (data && data.success && data.messages) {
+        return data.messages;
     }
     return [];
 }
@@ -252,18 +336,15 @@ async function doSearch() {
         return;
     }
 
-    try {
-        const response = await fetch(`api.php?action=search&keyword=${encodeURIComponent(keyword)}&myPid=${myPid}`);
-        const data = await response.json();
+    const data = await apiGet('search', { keyword: keyword });
 
-        if (data.success && data.users.length > 0) {
-            const users = data.users.filter(u => u.pid !== myPid);
-            showSearchResults(users);
-        } else {
-            showSearchResults([]);
-        }
-    } catch (e) {
-        showToast('搜索失败，请重试', 'error');
+    if (!data) return;
+
+    if (data.success && data.users.length > 0) {
+        const users = data.users.filter(u => u.pid !== myPid);
+        showSearchResults(users);
+    } else {
+        showSearchResults([]);
     }
 }
 
@@ -333,16 +414,11 @@ async function startChatWithPid(pid) {
     }
 
     if (!userInfoCache[pid]) {
-        try {
-            const response = await fetch(`api.php?action=getUser&pid=${pid}`);
-            const data = await response.json();
-            if (data.success) {
-                userInfoCache[pid] = data.user;
-                chats[pid].online = data.user.online;
-                updateChatList();
-            }
-        } catch (e) {
-            console.error('Error fetching user info:', e);
+        const result = await apiGet('getUser', { pid: pid });
+        if (result && result.success) {
+            userInfoCache[pid] = result.user;
+            chats[pid].online = result.user.online;
+            updateChatList();
         }
     }
 
@@ -379,7 +455,7 @@ function connectWebSocket() {
 }
 
 function handleWebSocketMessage(data) {
-    var type = data.type;
+    const type = data.type;
 
     switch (type) {
         case 'registered':
@@ -420,7 +496,7 @@ function handleWebSocketMessage(data) {
 }
 
 function handleIncomingMessage(data) {
-    var chatPid = data.from;
+    const chatPid = data.from;
 
     if (!chats[chatPid]) {
         chats[chatPid] = {
@@ -432,7 +508,7 @@ function handleIncomingMessage(data) {
         };
     }
 
-    var msg = {
+    const msg = {
         id: data.messageId,
         from: data.from,
         to: data.to,
@@ -452,14 +528,12 @@ function handleIncomingMessage(data) {
     }
 
     if (!userInfoCache[chatPid]) {
-        fetch(`api.php?action=getUser&pid=${chatPid}`)
-            .then(r => r.json())
-            .then(result => {
-                if (result.success) {
-                    userInfoCache[chatPid] = result.user;
-                    updateChatList();
-                }
-            });
+        apiGet('getUser', { pid: chatPid }).then(result => {
+            if (result && result.success) {
+                userInfoCache[chatPid] = result.user;
+                updateChatList();
+            }
+        });
     }
 
     updateChatList();
@@ -476,7 +550,7 @@ function handleSentConfirmation(data) {
     if (toPid && chats[toPid]) {
         for (let i = chats[toPid].messages.length - 1; i >= 0; i--) {
             const msg = chats[toPid].messages[i];
-            if (msg.from === myPid && !msg.id && !msg.status) {
+            if (msg.from === myPid && (!msg.id || !msg.status)) {
                 msg.id = messageId;
                 msg.status = data.status || 'sent';
                 break;
@@ -486,13 +560,14 @@ function handleSentConfirmation(data) {
         if (currentChatPid === toPid) {
             renderMessages();
         }
+        updateChatList();
     }
 
     if (!data.online) {
         if (offlineTimers[currentChatPid]) {
             showToast('对方暂时离线，消息可能无法送达', 'warning');
         } else {
-            var systemMsg = {
+            const systemMsg = {
                 type: 'system',
                 text: '对方已经离开，消息无法送达',
                 time: Date.now()
@@ -532,7 +607,7 @@ function updateUserStatus(pid, online) {
         }
 
         if (pid === currentChatPid) {
-            var statusEl = document.getElementById('onlineStatus');
+            const statusEl = document.getElementById('onlineStatus');
             if (statusEl) {
                 statusEl.textContent = online ? '在线' : '离线';
                 statusEl.style.color = online ? 'var(--success-color)' : 'var(--text-muted)';
@@ -545,7 +620,7 @@ function updateUserStatus(pid, online) {
             }
             offlineTimers[pid] = setTimeout(function() {
                 if (chats[pid] && !chats[pid].online) {
-                    var systemMsg = {
+                    const systemMsg = {
                         type: 'system',
                         text: '对方已离开',
                         time: Date.now()
@@ -561,6 +636,20 @@ function updateUserStatus(pid, online) {
             if (offlineTimers[pid]) {
                 clearTimeout(offlineTimers[pid]);
                 delete offlineTimers[pid];
+            }
+            
+            if (wasOnline === false && chats[pid].messages.length > 0) {
+                apiGet('getConversationMessages', {
+                    pid: myPid,
+                    otherPid: pid
+                }).then(result => {
+                    if (result && result.success && result.messages) {
+                        chats[pid].messages = result.messages;
+                        if (pid === currentChatPid) {
+                            renderMessages();
+                        }
+                    }
+                });
             }
         }
 
@@ -579,7 +668,7 @@ function copyPid() {
     navigator.clipboard.writeText(myPid).then(function() {
         showToast('PID已复制到剪贴板', 'success');
     }).catch(function() {
-        var input = document.createElement('input');
+        const input = document.createElement('input');
         input.value = myPid;
         document.body.appendChild(input);
         input.select();
@@ -590,8 +679,8 @@ function copyPid() {
 }
 
 function updateChatList() {
-    var chatList = document.getElementById('chatList');
-    var pids = Object.keys(chats);
+    const chatList = document.getElementById('chatList');
+    const pids = Object.keys(chats);
 
     if (pids.length === 0) {
         chatList.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="currentColor" width="48" height="48"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg><p>暂无聊天</p><span>搜索用户开始聊天</span></div>';
@@ -599,23 +688,34 @@ function updateChatList() {
     }
 
     pids.sort(function(a, b) {
-        var timeA = chats[a].lastTime || 0;
-        var timeB = chats[b].lastTime || 0;
+        const timeA = chats[a].lastTime || 0;
+        const timeB = chats[b].lastTime || 0;
         return timeB - timeA;
     });
 
     chatList.innerHTML = pids.map(function(pid) {
-        var chat = chats[pid];
-        var isActive = pid === currentChatPid;
-        var timeStr = chat.lastTime ? formatTime(chat.lastTime) : '';
-        var displayName = getUserDisplayName(pid);
-        var onlineClass = chat.online ? 'status-online' : 'status-offline';
+        const chat = chats[pid];
+        const isActive = pid === currentChatPid;
+        const timeStr = chat.lastTime ? formatTime(chat.lastTime) : '';
+        const displayName = getUserDisplayName(pid);
+        const onlineClass = chat.online ? 'status-online' : 'status-offline';
+        const lastMessageStatus = chat.last_message_status;
+        const lastMessageFrom = chat.last_message_from;
+        
+        let statusIndicator = '';
+        if (lastMessageFrom === myPid && lastMessageStatus) {
+            const statusText = lastMessageStatus === 'read' ? '已读' : 
+                             lastMessageStatus === 'delivered' ? '已送达' : '已发送';
+            const statusClass = lastMessageStatus === 'read' ? 'status-read' : 
+                               lastMessageStatus === 'delivered' ? 'status-delivered' : 'status-sent';
+            statusIndicator = `<span class="message-status ${statusClass}">${statusText}</span>`;
+        }
 
         return '<div class="chat-item ' + (isActive ? 'active' : '') + '" onclick="openChat(\'' + pid + '\')">' +
             '<div class="avatar small ' + onlineClass + '"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg></div>' +
             '<div class="chat-item-info">' +
             '<div class="chat-item-pid">' + escapeHtml(displayName) + '</div>' +
-            '<div class="chat-item-preview">' + escapeHtml(chat.lastMessage || '开始聊天') + '</div>' +
+            '<div class="chat-item-preview">' + escapeHtml(chat.lastMessage || '开始聊天') + ' ' + statusIndicator + '</div>' +
             '</div>' +
             '<div class="chat-item-meta">' +
             '<span class="chat-item-time">' + timeStr + '</span>' +
@@ -636,8 +736,8 @@ async function openChat(pid) {
     document.getElementById('chatWindow').style.display = 'flex';
     document.getElementById('targetNameDisplay').textContent = getUserDisplayName(pid);
 
-    var statusEl = document.getElementById('onlineStatus');
-    var online = chats[pid] ? chats[pid].online : false;
+    const statusEl = document.getElementById('onlineStatus');
+    const online = chats[pid] ? chats[pid].online : false;
     statusEl.textContent = online ? '在线' : '离线';
     statusEl.style.color = online ? 'var(--success-color)' : 'var(--text-muted)';
 
@@ -646,6 +746,11 @@ async function openChat(pid) {
             type: 'checkStatus',
             pid: pid
         }));
+    }
+
+    const messages = await loadConversationMessages(pid);
+    if (chats[pid]) {
+        chats[pid].messages = messages;
     }
 
     renderMessages();
@@ -663,15 +768,15 @@ function closeChat() {
 }
 
 function renderMessages() {
-    var container = document.getElementById('messages');
+    const container = document.getElementById('messages');
 
     if (!currentChatPid || !chats[currentChatPid]) {
         container.innerHTML = '';
         return;
     }
 
-    var messages = chats[currentChatPid].messages;
-    var displayName = getUserDisplayName(currentChatPid);
+    const messages = chats[currentChatPid].messages;
+    const displayName = getUserDisplayName(currentChatPid);
 
     if (messages.length === 0) {
         container.innerHTML = '<div class="system-message"><span>开始与 ' + escapeHtml(displayName) + ' 聊天</span></div>';
@@ -683,14 +788,14 @@ function renderMessages() {
             return '<div class="system-message warning"><span>' + escapeHtml(msg.text) + '</span></div>';
         }
 
-        var isSent = msg.from === myPid;
-        var timeStr = formatTime(msg.time);
-        var senderName = isSent ? myNickname : getUserDisplayName(msg.from);
-        var statusHtml = '';
+        const isSent = msg.from === myPid;
+        const timeStr = formatTime(msg.time);
+        const senderName = isSent ? myNickname : getUserDisplayName(msg.from);
+        let statusHtml = '';
 
         if (isSent && msg.status) {
-            var statusText = '';
-            var statusClass = '';
+            let statusText = '';
+            let statusClass = '';
             if (msg.status === 'sent') {
                 statusText = '已发送';
                 statusClass = 'status-sent';
@@ -721,17 +826,17 @@ function renderMessages() {
 }
 
 function sendMessage() {
-    var input = document.getElementById('messageInput');
-    var text = input.value.trim();
+    const input = document.getElementById('messageInput');
+    const text = input.value.trim();
 
     if (!text || !currentChatPid) return;
 
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-        showToast('连接已断开，请刷新页面', 'error');
+        showToast('连接已断开，正在重连...', 'warning');
         return;
     }
 
-    var message = {
+    const message = {
         from: myPid,
         to: currentChatPid,
         text: text,
@@ -742,7 +847,7 @@ function sendMessage() {
         chats[currentChatPid] = { messages: [], unread: 0, lastMessage: '', lastTime: null, online: false };
     }
 
-    var tempMsg = {
+    const tempMsg = {
         from: message.from,
         to: message.to,
         text: message.text,
@@ -766,6 +871,8 @@ function sendMessage() {
         text: message.text,
         time: message.time
     }));
+
+    apiPost('send', { message: message });
 }
 
 async function markAsRead(otherPid) {
@@ -779,43 +886,35 @@ async function markAsRead(otherPid) {
         }));
     }
 
-    try {
-        const response = await fetch('api.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                action: 'markAsRead',
-                userPid: myPid,
-                otherPid: otherPid
-            })
-        });
-        const data = await response.json();
+    const data = await apiPost('markAsRead', {
+        userPid: myPid,
+        otherPid: otherPid
+    });
 
-        if (data.success && chats[otherPid]) {
-            chats[otherPid].messages.forEach(msg => {
-                if (msg.to === myPid && msg.status !== 'read') {
-                    msg.status = 'read';
-                }
-            });
-            chats[otherPid].unread = 0;
-            updateChatList();
-            if (currentChatPid === otherPid) {
-                renderMessages();
+    if (data && data.success && chats[otherPid]) {
+        chats[otherPid].messages.forEach(msg => {
+            if (msg.to === myPid && msg.status !== 'read') {
+                msg.status = 'read';
             }
+        });
+        chats[otherPid].unread = 0;
+        updateChatList();
+        if (currentChatPid === otherPid) {
+            renderMessages();
         }
-    } catch (e) {
-        console.error('Error marking as read:', e);
     }
 }
 
 async function getUnreadCount(otherPid) {
-    try {
-        const response = await fetch(`api.php?action=getUnreadCount&pid=${myPid}&otherPid=${otherPid}`);
-        const data = await response.json();
-        return data.success ? data.unreadCount : 0;
-    } catch (e) {
-        return 0;
+    const data = await apiGet('getUnreadCount', {
+        pid: myPid,
+        otherPid: otherPid
+    });
+
+    if (data && data.success) {
+        return data.unreadCount;
     }
+    return 0;
 }
 
 function handleKeyPress(event) {
@@ -825,9 +924,9 @@ function handleKeyPress(event) {
 }
 
 function formatTime(timestamp) {
-    var date = new Date(timestamp);
-    var now = new Date();
-    var diff = now - date;
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now - date;
 
     if (diff < 60000) {
         return '刚刚';
@@ -841,13 +940,13 @@ function formatTime(timestamp) {
 }
 
 function escapeHtml(text) {
-    var div = document.createElement('div');
+    const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }
 
 function showToast(message, type) {
-    var toast = document.getElementById('toast');
+    const toast = document.getElementById('toast');
     toast.textContent = message;
     toast.className = 'toast ' + (type || '');
 
@@ -857,3 +956,68 @@ function showToast(message, type) {
         toast.classList.remove('show');
     }, 3000);
 }
+
+setInterval(async function() {
+    if (authToken && myPid) {
+        const result = await apiGet('getConversations', { pid: myPid });
+        if (result && result.success) {
+            let needsUpdate = false;
+            for (const conv of result.conversations) {
+                const otherPid = conv.other_pid;
+                if (chats[otherPid]) {
+                    const oldUnread = chats[otherPid].unread;
+                    const oldLastTime = chats[otherPid].lastTime;
+                    
+                    if (oldUnread !== conv.unread_count || 
+                        oldLastTime !== conv.last_time_timestamp ||
+                        chats[otherPid].online !== conv.is_online ||
+                        chats[otherPid].lastMessage !== conv.last_message) {
+                        
+                        chats[otherPid].unread = conv.unread_count || 0;
+                        chats[otherPid].lastTime = conv.last_time_timestamp || null;
+                        chats[otherPid].online = conv.is_online;
+                        chats[otherPid].lastMessage = conv.last_message || '';
+                        chats[otherPid].last_message_status = conv.last_message_status;
+                        chats[otherPid].last_message_from = conv.last_message_from;
+                        needsUpdate = true;
+                        
+                        if (oldUnread < conv.unread_count && otherPid !== currentChatPid) {
+                            loadConversationMessages(otherPid).then(messages => {
+                                if (chats[otherPid]) {
+                                    chats[otherPid].messages = messages;
+                                    if (currentChatPid === otherPid) {
+                                        renderMessages();
+                                    }
+                                }
+                            });
+                        }
+                    }
+                } else {
+                    chats[otherPid] = {
+                        messages: [],
+                        unread: conv.unread_count || 0,
+                        lastMessage: conv.last_message || '',
+                        lastTime: conv.last_time_timestamp || null,
+                        online: conv.is_online,
+                        last_message_status: conv.last_message_status,
+                        last_message_from: conv.last_message_from
+                    };
+                    loadConversationMessages(otherPid).then(messages => {
+                        if (chats[otherPid]) {
+                            chats[otherPid].messages = messages;
+                            updateChatList();
+                        }
+                    });
+                    needsUpdate = true;
+                }
+            }
+            
+            if (needsUpdate) {
+                updateChatList();
+                if (currentChatPid) {
+                    renderMessages();
+                }
+            }
+        }
+    }
+}, 5000);

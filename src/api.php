@@ -119,6 +119,9 @@ try {
             case 'sendEmoji':
                 handleSendEmojiMessage($input);
                 break;
+            case 'uploadFile':
+                handleFileUpload();
+                break;
             default:
                 echo json_encode(['success' => false, 'error' => 'Unknown action']);
         }
@@ -158,9 +161,6 @@ try {
             break;
         case 'getEmojis':
             handleGetEmojis();
-            break;
-        case 'uploadFile':
-            handleFileUpload();
             break;
         default:
             echo json_encode(['success' => false, 'error' => 'Unknown action']);

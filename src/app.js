@@ -115,9 +115,8 @@ function clearAuthData() {
 
 async function verifyAndRestoreSession() {
     const savedToken = localStorage.getItem('authToken');
-    const savedUser = localStorage.getItem('chatUser');
     
-    if (!savedToken || !savedUser) {
+    if (!savedToken) {
         return false;
     }
     
@@ -129,6 +128,8 @@ async function verifyAndRestoreSession() {
             currentUser = result.user;
             myPid = result.user.pid;
             myNickname = result.user.nickname;
+            
+            localStorage.setItem('chatUser', JSON.stringify(result.user));
             return true;
         } else {
             clearAuthData();
@@ -847,6 +848,9 @@ function updateUserStatus(pid, online) {
 }
 
 function getUserDisplayName(pid) {
+    if (!pid) {
+        return '未知用户';
+    }
     if (userInfoCache[pid]) {
         return userInfoCache[pid].nickname;
     }
@@ -1041,8 +1045,8 @@ function renderMessages() {
 
         let recallBtn = '';
         if (msg.id && canRecallMessage(msg)) {
-            contextMenuHandler = ` oncontextmenu="showContextMenu(event, ${msg.id})"`;
-            recallBtn = `<button class="recall-btn" onclick="recallMessage(${msg.id})" title="撤回消息">
+            contextMenuHandler = ` oncontextmenu="showContextMenu(event, '${msg.id}')"`;
+            recallBtn = `<button class="recall-btn" onclick="recallMessage('${msg.id}')" title="撤回消息">
                 <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
                     <path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/>
                 </svg>
@@ -1074,7 +1078,7 @@ function sendMessage(messageType = 'text', extraData = {}) {
         text = input.value.trim();
         if (!text) return;
     } else if (messageType === 'emoji') {
-        text = extraData.emojiUrl || '';
+        text = extraData.emoji_url || '';
     } else if (messageType === 'image' || messageType === 'file') {
         text = extraData.displayText || '';
     }

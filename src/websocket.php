@@ -185,29 +185,85 @@ function handleDisconnect($clientId, &$clients, &$pidToSocketId, &$socketIdToPid
 
 function handleMessage($clientId, $client, $message, &$clients, &$pidToSocketId, &$socketIdToPid) {
     $type = $message['type'] ?? '';
+    
+    $authenticatedPid = $socketIdToPid[$clientId] ?? null;
+    if ($type !== 'register' && $type !== 'ping' && !$authenticatedPid) {
+        sendToClient($client, [
+            'type' => 'error',
+            'error' => '未授权，请先注册'
+        ]);
+        return;
+    }
 
     switch ($type) {
         case 'register':
             $pid = $message['pid'] ?? '';
-            if (strlen($pid) === 32) {
-                $pidToSocketId[$pid] = $clientId;
-                $socketIdToPid[$clientId] = $pid;
-
-                echo "用户注册: PID=$pid, ID=$clientId\n";
-
-                try {
-                    updateUserActivity($pid, true);
-                } catch (Exception $e) {
-                    error_log("Error updating user activity: " . $e->getMessage());
-                }
-
+            $token = $message['token'] ?? '';
+            
+            if (strlen($pid) !== 32) {
                 sendToClient($client, [
-                    'type' => 'registered',
-                    'success' => true
+                    'type' => 'registerError',
+                    'success' => false,
+                    'error' => '无效的PID'
                 ]);
-
-                broadcastUserStatus($pid, true, $clients, $pidToSocketId, $socketIdToPid);
+                break;
             }
+            
+            if (!$token) {
+                sendToClient($client, [
+                    'type' => 'registerError',
+                    'success' => false,
+                    'error' => '缺少认证令牌'
+                ]);
+                break;
+            }
+            
+            try {
+                $user = validateToken($token);
+                if (!$user) {
+                    sendToClient($client, [
+                        'type' => 'registerError',
+                        'success' => false,
+                        'error' => '认证令牌无效或已过期'
+                    ]);
+                    break;
+                }
+                
+                if ($user['pid'] !== $pid) {
+                    sendToClient($client, [
+                        'type' => 'registerError',
+                        'success' => false,
+                        'error' => '令牌与用户不匹配'
+                    ]);
+                    break;
+                }
+            } catch (Exception $e) {
+                error_log("Token validation error: " . $e->getMessage());
+                sendToClient($client, [
+                    'type' => 'registerError',
+                    'success' => false,
+                    'error' => '认证失败'
+                ]);
+                break;
+            }
+            
+            $pidToSocketId[$pid] = $clientId;
+            $socketIdToPid[$clientId] = $pid;
+
+            echo "用户注册: PID=$pid, ID=$clientId\n";
+
+            try {
+                updateUserActivity($pid, true);
+            } catch (Exception $e) {
+                error_log("Error updating user activity: " . $e->getMessage());
+            }
+
+            sendToClient($client, [
+                'type' => 'registered',
+                'success' => true
+            ]);
+
+            broadcastUserStatus($pid, true, $clients, $pidToSocketId, $socketIdToPid);
             break;
 
         case 'send':
@@ -215,6 +271,14 @@ function handleMessage($clientId, $client, $message, &$clients, &$pidToSocketId,
             $from = $message['from'] ?? '';
             $text = $message['text'] ?? '';
             $time = $message['time'] ?? time() * 1000;
+
+            if ($from !== $authenticatedPid) {
+                sendToClient($client, [
+                    'type' => 'error',
+                    'error' => '无权以他人身份发送消息'
+                ]);
+                break;
+            }
 
             if ($to && $from && $text) {
                 $targetSocketId = $pidToSocketId[$to] ?? null;
@@ -270,6 +334,14 @@ function handleMessage($clientId, $client, $message, &$clients, &$pidToSocketId,
             $userPid = $message['userPid'] ?? '';
             $otherPid = $message['otherPid'] ?? '';
 
+            if ($userPid !== $authenticatedPid) {
+                sendToClient($client, [
+                    'type' => 'error',
+                    'error' => '无权操作'
+                ]);
+                break;
+            }
+
             if ($userPid && $otherPid) {
                 try {
                     $conversationId = getOrCreateConversation($userPid, $otherPid);
@@ -306,7 +378,7 @@ function handleMessage($clientId, $client, $message, &$clients, &$pidToSocketId,
 
         case 'recall':
             $messageId = $message['messageId'] ?? '';
-            $fromPid = $socketIdToPid[$clientId] ?? '';
+            $fromPid = $authenticatedPid;
 
             if ($messageId && $fromPid) {
                 try {
@@ -354,7 +426,7 @@ function handleMessage($clientId, $client, $message, &$clients, &$pidToSocketId,
             break;
 
         case 'ping':
-            $pid = $socketIdToPid[$clientId] ?? null;
+            $pid = $authenticatedPid;
             if ($pid) {
                 try {
                     updateUserActivity($pid);

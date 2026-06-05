@@ -10,9 +10,13 @@ CREATE TABLE IF NOT EXISTS users (
     INDEX idx_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 对于已存在的数据库，请执行以下迁移语句：
+-- ALTER TABLE conversations MODIFY COLUMN conversation_key VARCHAR(65) NOT NULL UNIQUE;
+-- ALTER TABLE messages MODIFY COLUMN status ENUM('sent', 'delivered', 'read', 'recalled') DEFAULT 'sent';
+
 CREATE TABLE IF NOT EXISTS conversations (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    conversation_key VARCHAR(64) NOT NULL UNIQUE,
+    conversation_key VARCHAR(65) NOT NULL UNIQUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_conversation_key (conversation_key)
@@ -28,9 +32,6 @@ CREATE TABLE IF NOT EXISTS conversation_members (
     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
     INDEX idx_user_pid (user_pid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- 对于已存在的数据库，请执行以下迁移语句：
--- ALTER TABLE messages MODIFY COLUMN status ENUM('sent', 'delivered', 'read', 'recalled') DEFAULT 'sent';
 
 CREATE TABLE IF NOT EXISTS messages (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

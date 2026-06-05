@@ -78,6 +78,23 @@ function saveAuthData(user, token) {
     localStorage.setItem('authToken', token);
 }
 
+function saveCurrentChatPid() {
+    if (currentChatPid) {
+        localStorage.setItem('currentChatPid', currentChatPid);
+    } else {
+        localStorage.removeItem('currentChatPid');
+    }
+}
+
+function restoreCurrentChatPid() {
+    const saved = localStorage.getItem('currentChatPid');
+    if (saved && saved !== 'null' && saved !== 'undefined') {
+        currentChatPid = saved;
+        return true;
+    }
+    return false;
+}
+
 function clearAuthData() {
     currentUser = null;
     myPid = null;
@@ -90,6 +107,7 @@ function clearAuthData() {
     
     localStorage.removeItem('chatUser');
     localStorage.removeItem('authToken');
+    localStorage.removeItem('currentChatPid');
 }
 
 async function verifyAndRestoreSession() {
@@ -249,7 +267,22 @@ async function showChatInterface() {
     document.getElementById('myNickname').textContent = myNickname;
     document.getElementById('myPid').textContent = myPid;
 
+    restoreCurrentChatPid();
     await loadAllData();
+    
+    if (currentChatPid && chats[currentChatPid]) {
+        document.getElementById('chatPlaceholder').style.display = 'none';
+        document.getElementById('chatWindow').style.display = 'flex';
+        document.getElementById('targetNameDisplay').textContent = getUserDisplayName(currentChatPid);
+        const statusEl = document.getElementById('onlineStatus');
+        const online = chats[currentChatPid] ? chats[currentChatPid].online : false;
+        statusEl.textContent = online ? '在线' : '离线';
+        statusEl.style.color = online ? 'var(--success-color)' : 'var(--text-muted)';
+        renderMessages();
+        await markAsRead(currentChatPid);
+    }
+    
+    updateChatList();
     connectWebSocket();
 }
 
@@ -443,10 +476,11 @@ function connectWebSocket() {
 
     ws.onopen = function() {
         console.log('WebSocket connected');
-        if (myPid) {
+        if (myPid && authToken) {
             ws.send(JSON.stringify({
                 type: 'register',
-                pid: myPid
+                pid: myPid,
+                token: authToken
             }));
         }
     };
@@ -510,6 +544,16 @@ function handleWebSocketMessage(data) {
 
         case 'recallError':
             handleRecallError(data);
+            break;
+
+        case 'registerError':
+            showToast(data.error || 'WebSocket鉴权失败', 'error');
+            console.error('WebSocket registration error:', data.error);
+            break;
+
+        case 'error':
+            showToast(data.error || '操作失败', 'error');
+            console.error('WebSocket error:', data.error);
             break;
     }
 }
@@ -854,6 +898,7 @@ function updateChatList() {
 
 async function openChat(pid) {
     currentChatPid = pid;
+    saveCurrentChatPid();
 
     if (chats[pid]) {
         chats[pid].unread = 0;
@@ -889,6 +934,7 @@ async function openChat(pid) {
 
 function closeChat() {
     currentChatPid = null;
+    saveCurrentChatPid();
     document.getElementById('chatPlaceholder').style.display = 'flex';
     document.getElementById('chatWindow').style.display = 'none';
     updateChatList();
@@ -942,8 +988,14 @@ function renderMessages() {
             statusHtml = `<span class="message-status ${statusClass}">${statusText}</span>`;
         }
 
+        let recallBtn = '';
         if (msg.id && canRecallMessage(msg)) {
             contextMenuHandler = ` oncontextmenu="showContextMenu(event, ${msg.id})"`;
+            recallBtn = `<button class="recall-btn" onclick="recallMessage(${msg.id})" title="撤回消息">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                    <path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/>
+                </svg>
+            </button>`;
         }
 
         return '<div class="message ' + messageClass + '" data-message-id="' + (msg.id || '') + '"' + contextMenuHandler + '>' +
@@ -954,6 +1006,7 @@ function renderMessages() {
             '<div class="message-meta">' +
             '<span class="message-time">' + timeStr + '</span>' +
             statusHtml +
+            recallBtn +
             '</div>' +
             '</div>' +
             '</div>';
@@ -1154,6 +1207,8 @@ setInterval(async function() {
                 if (currentChatPid) {
                     renderMessages();
                 }
+            } else if (currentChatPid) {
+                renderMessages();
             }
         }
     }

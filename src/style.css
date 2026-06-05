@@ -1037,6 +1037,35 @@ body {
     flex-shrink: 0;
 }
 
+/* 撤回按钮 */
+.recall-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    opacity: 0.7;
+}
+
+.recall-btn:hover {
+    background: var(--bg-hover);
+    color: var(--primary-light);
+    opacity: 1;
+}
+
+.message.sent:hover .recall-btn {
+    display: flex;
+}
+
+.message.recalled .recall-btn {
+    display: none !important;
+}
+
 /* 退出登录按钮 */
 .logout-btn {
     background: rgba(255, 255, 255, 0.2);

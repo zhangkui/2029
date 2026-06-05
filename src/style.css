@@ -591,6 +591,10 @@ body {
     border-color: #f59e0b;
 }
 
+.toast.info {
+    border-color: var(--primary-color);
+}
+
 /* 响应式设计 */
 @media (max-width: 768px) {
     .container {
@@ -976,6 +980,61 @@ body {
 .message-status.status-read {
     color: var(--primary-light);
     background: transparent;
+}
+
+.message-status.status-recalled {
+    color: var(--text-muted);
+    background: transparent;
+}
+
+/* 撤回消息样式 */
+.message.recalled .message-bubble {
+    font-style: italic;
+    opacity: 0.6;
+    background: transparent !important;
+    color: var(--text-muted) !important;
+    border: 1px dashed var(--border-color);
+}
+
+.message.recalled.sent .message-bubble {
+    background: transparent !important;
+    color: var(--text-muted) !important;
+}
+
+.message.recalled.received .message-bubble {
+    background: transparent !important;
+    color: var(--text-muted) !important;
+}
+
+/* 右键菜单 */
+.context-menu {
+    position: fixed;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    min-width: 140px;
+    z-index: 2000;
+    overflow: hidden;
+}
+
+.context-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 15px;
+    cursor: pointer;
+    transition: background 0.2s;
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.context-menu-item:hover {
+    background: var(--bg-hover);
+}
+
+.context-menu-item svg {
+    flex-shrink: 0;
 }
 
 /* 退出登录按钮 */

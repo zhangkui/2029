@@ -107,6 +107,9 @@ try {
             case 'updateMessageStatus':
                 handleUpdateMessageStatus($input);
                 break;
+            case 'recallMessage':
+                handleRecallMessage($input);
+                break;
             case 'logout':
                 handleLogoutPost($input);
                 break;
@@ -317,7 +320,7 @@ function handleUpdateMessageStatus($input) {
     $messageId = $input['messageId'] ?? '';
     $status = $input['status'] ?? '';
 
-    if (!$messageId || !in_array($status, ['sent', 'delivered', 'read'])) {
+    if (!$messageId || !in_array($status, ['sent', 'delivered', 'read', 'recalled'])) {
         echo json_encode(['success' => false, 'error' => 'Invalid parameters']);
         return;
     }
@@ -328,6 +331,28 @@ function handleUpdateMessageStatus($input) {
         'success' => true,
         'updatedCount' => $count
     ]);
+}
+
+function handleRecallMessage($input) {
+    global $currentUser;
+    $messageId = $input['messageId'] ?? '';
+
+    if (!$messageId) {
+        echo json_encode(['success' => false, 'error' => 'Invalid parameters']);
+        return;
+    }
+
+    $result = recallMessage($messageId, $currentUser['pid']);
+
+    if ($result['success']) {
+        $message = getMessageById($messageId);
+        echo json_encode([
+            'success' => true,
+            'message' => $message
+        ]);
+    } else {
+        echo json_encode($result);
+    }
 }
 
 function handleSearch() {

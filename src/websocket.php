@@ -304,6 +304,55 @@ function handleMessage($clientId, $client, $message, &$clients, &$pidToSocketId,
             ]);
             break;
 
+        case 'recall':
+            $messageId = $message['messageId'] ?? '';
+            $fromPid = $socketIdToPid[$clientId] ?? '';
+
+            if ($messageId && $fromPid) {
+                try {
+                    $result = recallMessage($messageId, $fromPid);
+                    
+                    if ($result['success']) {
+                        $dbMessage = getMessageById($messageId);
+                        $toPid = $dbMessage['to_pid'];
+                        
+                        $recallData = [
+                            'type' => 'recall',
+                            'messageId' => $messageId,
+                            'from' => $fromPid,
+                            'to' => $toPid,
+                            'time' => time() * 1000
+                        ];
+                        
+                        $senderSocketId = $pidToSocketId[$fromPid] ?? null;
+                        if ($senderSocketId && isset($clients[$senderSocketId])) {
+                            sendToClient($clients[$senderSocketId], $recallData);
+                        }
+                        
+                        $recipientSocketId = $pidToSocketId[$toPid] ?? null;
+                        if ($recipientSocketId && isset($clients[$recipientSocketId])) {
+                            sendToClient($clients[$recipientSocketId], $recallData);
+                        }
+                        
+                        echo "消息撤回: $fromPid 撤回了消息 $messageId\n";
+                    } else {
+                        sendToClient($client, [
+                            'type' => 'recallError',
+                            'messageId' => $messageId,
+                            'error' => $result['error']
+                        ]);
+                    }
+                } catch (Exception $e) {
+                    error_log("Error recalling message: " . $e->getMessage());
+                    sendToClient($client, [
+                        'type' => 'recallError',
+                        'messageId' => $messageId,
+                        'error' => '撤回失败'
+                    ]);
+                }
+            }
+            break;
+
         case 'ping':
             $pid = $socketIdToPid[$clientId] ?? null;
             if ($pid) {

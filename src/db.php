@@ -196,6 +196,52 @@ function updateMessageStatus($messageId, $status) {
     );
 }
 
+function recallMessage($messageId, $userPid) {
+    $db = getDb();
+    
+    $message = $db->fetchOne(
+        "SELECT id, from_pid, UNIX_TIMESTAMP(created_at) as created_at_ts 
+         FROM messages 
+         WHERE id = ?",
+        [$messageId]
+    );
+    
+    if (!$message) {
+        return ['success' => false, 'error' => '消息不存在'];
+    }
+    
+    if ($message['from_pid'] !== $userPid) {
+        return ['success' => false, 'error' => '只能撤回自己发送的消息'];
+    }
+    
+    $timeDiff = time() - $message['created_at_ts'];
+    if ($timeDiff > 120) {
+        return ['success' => false, 'error' => '超过2分钟，无法撤回'];
+    }
+    
+    $count = $db->execute(
+        "UPDATE messages SET status = 'recalled' WHERE id = ?",
+        [$messageId]
+    );
+    
+    if ($count > 0) {
+        return ['success' => true];
+    }
+    
+    return ['success' => false, 'error' => '撤回失败'];
+}
+
+function getMessageById($messageId) {
+    $db = getDb();
+    return $db->fetchOne(
+        "SELECT id, conversation_id, from_pid, to_pid, message_text, status, 
+                UNIX_TIMESTAMP(created_at) * 1000 as time
+         FROM messages 
+         WHERE id = ?",
+        [$messageId]
+    );
+}
+
 function markMessagesAsRead($conversationId, $userPid) {
     $db = getDb();
     return $db->execute(
@@ -239,7 +285,10 @@ function getUserConversations($userPid) {
                 cm2.user_pid as other_pid,
                 u.nickname as other_nickname,
                 u.username as other_username,
-                m.message_text as last_message,
+                CASE 
+                    WHEN m.status = 'recalled' THEN '该消息已撤回'
+                    ELSE m.message_text 
+                END as last_message,
                 m.created_at as last_time,
                 m.status as last_message_status,
                 m.from_pid as last_message_from,
@@ -268,7 +317,7 @@ function getUserConversations($userPid) {
 
 function getConversationMessages($conversationId, $limit = 100, $offset = 0) {
     $db = getDb();
-    return $db->fetchAll(
+    $messages = $db->fetchAll(
         "SELECT id, from_pid, to_pid, message_text as text, status, 
                 UNIX_TIMESTAMP(created_at) * 1000 as time
          FROM messages 
@@ -277,6 +326,14 @@ function getConversationMessages($conversationId, $limit = 100, $offset = 0) {
          LIMIT ? OFFSET ?",
         [$conversationId, $limit, $offset]
     );
+    
+    foreach ($messages as &$msg) {
+        if ($msg['status'] === 'recalled') {
+            $msg['text'] = '该消息已撤回';
+        }
+    }
+    
+    return $messages;
 }
 
 function generateFixedPid() {

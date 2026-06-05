@@ -11,6 +11,8 @@ let searchTimer = null;
 let offlineTimers = {};
 let pendingMessages = {};
 const OFFLINE_GRACE_PERIOD = 30000;
+const RECALL_TIME_LIMIT = 120000;
+let contextMenuTargetMessageId = null;
 
 async function apiRequest(action, options = {}) {
     const headers = {
@@ -141,6 +143,15 @@ document.addEventListener('DOMContentLoaded', async function() {
     document.addEventListener('click', function(e) {
         if (!e.target.closest('.new-chat')) {
             hideSearchResults();
+        }
+        if (!e.target.closest('#contextMenu')) {
+            hideContextMenu();
+        }
+    });
+
+    document.addEventListener('contextmenu', function(e) {
+        if (!e.target.closest('.message')) {
+            hideContextMenu();
         }
     });
 });
@@ -492,6 +503,14 @@ function handleWebSocketMessage(data) {
 
         case 'pong':
             break;
+
+        case 'recall':
+            handleRecallMessage(data);
+            break;
+
+        case 'recallError':
+            handleRecallError(data);
+            break;
     }
 }
 
@@ -595,6 +614,114 @@ function handleMessagesRead(data) {
         }
         updateChatList();
     }
+}
+
+function handleRecallMessage(data) {
+    const messageId = data.messageId;
+    const fromPid = data.from;
+    const toPid = data.to;
+
+    const chatPid = fromPid === myPid ? toPid : fromPid;
+
+    if (chats[chatPid]) {
+        chats[chatPid].messages.forEach(msg => {
+            if (msg.id === messageId) {
+                msg.status = 'recalled';
+                msg.text = '该消息已撤回';
+            }
+        });
+
+        if (chats[chatPid].messages.length > 0) {
+            const lastMsg = chats[chatPid].messages[chats[chatPid].messages.length - 1];
+            if (lastMsg.id === messageId) {
+                chats[chatPid].lastMessage = '该消息已撤回';
+            }
+        }
+
+        if (currentChatPid === chatPid) {
+            renderMessages();
+        }
+        updateChatList();
+    }
+
+    if (fromPid === myPid) {
+        showToast('消息已撤回', 'success');
+    } else {
+        showToast('对方撤回了一条消息', 'info');
+    }
+}
+
+function handleRecallError(data) {
+    showToast(data.error || '撤回失败', 'error');
+}
+
+async function recallMessage(messageId) {
+    if (!messageId) return;
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            type: 'recall',
+            messageId: messageId
+        }));
+    } else {
+        const data = await apiPost('recallMessage', {
+            messageId: messageId
+        });
+
+        if (data && data.success) {
+            handleRecallMessage({
+                messageId: messageId,
+                from: data.message.from_pid,
+                to: data.message.to_pid,
+                time: Date.now()
+            });
+        } else if (data) {
+            showToast(data.error || '撤回失败', 'error');
+        }
+    }
+}
+
+function canRecallMessage(msg) {
+    if (!msg || !msg.id) return false;
+    if (msg.from !== myPid) return false;
+    if (msg.status === 'recalled') return false;
+    
+    const timeDiff = Date.now() - msg.time;
+    return timeDiff <= RECALL_TIME_LIMIT;
+}
+
+function showContextMenu(e, messageId) {
+    e.preventDefault();
+    
+    if (!currentChatPid || !chats[currentChatPid]) return;
+    
+    const msg = chats[currentChatPid].messages.find(m => m.id === messageId);
+    if (!msg || !canRecallMessage(msg)) {
+        hideContextMenu();
+        return;
+    }
+    
+    contextMenuTargetMessageId = messageId;
+    
+    const menu = document.getElementById('contextMenu');
+    menu.style.left = e.pageX + 'px';
+    menu.style.top = e.pageY + 'px';
+    menu.style.display = 'block';
+}
+
+function hideContextMenu() {
+    const menu = document.getElementById('contextMenu');
+    if (menu) {
+        menu.style.display = 'none';
+    }
+    contextMenuTargetMessageId = null;
+}
+
+function doRecallMessage() {
+    if (contextMenuTargetMessageId) {
+        recallMessage(contextMenuTargetMessageId);
+    }
+    hideContextMenu();
 }
 
 function updateUserStatus(pid, online) {
@@ -791,9 +918,15 @@ function renderMessages() {
         const isSent = msg.from === myPid;
         const timeStr = formatTime(msg.time);
         const senderName = isSent ? myNickname : getUserDisplayName(msg.from);
+        const isRecalled = msg.status === 'recalled';
         let statusHtml = '';
+        let messageClass = isSent ? 'sent' : 'received';
+        let contextMenuHandler = '';
 
-        if (isSent && msg.status) {
+        if (isRecalled) {
+            messageClass += ' recalled';
+            statusHtml = '<span class="message-status status-recalled">已撤回</span>';
+        } else if (isSent && msg.status) {
             let statusText = '';
             let statusClass = '';
             if (msg.status === 'sent') {
@@ -809,7 +942,11 @@ function renderMessages() {
             statusHtml = `<span class="message-status ${statusClass}">${statusText}</span>`;
         }
 
-        return '<div class="message ' + (isSent ? 'sent' : 'received') + '">' +
+        if (msg.id && canRecallMessage(msg)) {
+            contextMenuHandler = ` oncontextmenu="showContextMenu(event, ${msg.id})"`;
+        }
+
+        return '<div class="message ' + messageClass + '" data-message-id="' + (msg.id || '') + '"' + contextMenuHandler + '>' +
             '<div class="avatar"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg></div>' +
             '<div class="message-content">' +
             '<div class="message-sender">' + escapeHtml(senderName) + '</div>' +

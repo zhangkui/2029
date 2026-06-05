@@ -113,6 +113,12 @@ try {
             case 'logout':
                 handleLogoutPost($input);
                 break;
+            case 'sendFile':
+                handleSendFileMessage($input);
+                break;
+            case 'sendEmoji':
+                handleSendEmojiMessage($input);
+                break;
             default:
                 echo json_encode(['success' => false, 'error' => 'Unknown action']);
         }
@@ -149,6 +155,12 @@ try {
             break;
         case 'verifyToken':
             handleVerifyToken();
+            break;
+        case 'getEmojis':
+            handleGetEmojis();
+            break;
+        case 'uploadFile':
+            handleFileUpload();
             break;
         default:
             echo json_encode(['success' => false, 'error' => 'Unknown action']);
@@ -258,14 +270,27 @@ function handleSendMessage($input) {
     updateUserActivity($message['from']);
 
     $conversationId = getOrCreateConversation($message['from'], $message['to']);
+    $messageType = $message['message_type'] ?? 'text';
     $status = $recipientOnline ? 'delivered' : 'sent';
-    $messageId = saveMessage($conversationId, $message['from'], $message['to'], $message['text'], $status);
+    $messageId = saveMessage(
+        $conversationId, 
+        $message['from'], 
+        $message['to'], 
+        $message['text'], 
+        $status,
+        $messageType,
+        $message['file_path'] ?? null,
+        $message['file_name'] ?? null,
+        $message['file_size'] ?? null,
+        $message['file_mime'] ?? null
+    );
 
     echo json_encode([
         'success' => true,
         'online' => $recipientOnline,
         'messageId' => $messageId,
-        'status' => $status
+        'status' => $status,
+        'message_type' => $messageType
     ]);
 }
 
@@ -521,4 +546,208 @@ function handleGetUnreadCount() {
     $count = getUnreadCount($conversationId, $pid);
 
     echo json_encode(['success' => true, 'unreadCount' => $count]);
+}
+
+function handleGetEmojis() {
+    $category = $_GET['category'] ?? null;
+    $emojis = getAllEmojis($category);
+    $categories = getEmojiCategories();
+    
+    echo json_encode([
+        'success' => true,
+        'emojis' => $emojis,
+        'categories' => $categories
+    ]);
+}
+
+function handleFileUpload() {
+    global $currentUser;
+    
+    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
+        echo json_encode(['success' => false, 'error' => '文件上传失败']);
+        return;
+    }
+    
+    $file = $_FILES['file'];
+    $fileType = $_POST['file_type'] ?? 'file';
+    
+    $allowedImageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/jpg'];
+    $allowedFileTypes = array_merge($allowedImageTypes, [
+        'application/pdf', 'application/msword', 
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/zip', 'application/x-rar-compressed',
+        'text/plain', 'audio/mpeg', 'audio/mp3', 'video/mp4', 'video/avi'
+    ]);
+    
+    $maxImageSize = 10 * 1024 * 1024;
+    $maxFileSize = 50 * 1024 * 1024;
+    
+    if ($fileType === 'image') {
+        if (!in_array($file['type'], $allowedImageTypes)) {
+            echo json_encode(['success' => false, 'error' => '不支持的图片类型，仅支持 JPG、PNG、GIF、WEBP']);
+            return;
+        }
+        if ($file['size'] > $maxImageSize) {
+            echo json_encode(['success' => false, 'error' => '图片大小不能超过 10MB']);
+            return;
+        }
+    } else {
+        if (!in_array($file['type'], $allowedFileTypes)) {
+            echo json_encode(['success' => false, 'error' => '不支持的文件类型']);
+            return;
+        }
+        if ($file['size'] > $maxFileSize) {
+            echo json_encode(['success' => false, 'error' => '文件大小不能超过 50MB']);
+            return;
+        }
+    }
+    
+    $uploadDir = dirname(__DIR__) . '/uploads/';
+    if (!file_exists($uploadDir)) {
+        mkdir($uploadDir, 0755, true);
+    }
+    
+    $fileExt = pathinfo($file['name'], PATHINFO_EXTENSION);
+    $fileName = $currentUser['pid'] . '_' . time() . '_' . bin2hex(random_bytes(8)) . '.' . $fileExt;
+    $filePath = $uploadDir . $fileName;
+    
+    if (move_uploaded_file($file['tmp_name'], $filePath)) {
+        $relativePath = 'uploads/' . $fileName;
+        echo json_encode([
+            'success' => true,
+            'file_path' => $relativePath,
+            'file_name' => $file['name'],
+            'file_size' => $file['size'],
+            'file_mime' => $file['type'],
+            'file_url' => $relativePath
+        ]);
+    } else {
+        echo json_encode(['success' => false, 'error' => '文件保存失败']);
+    }
+}
+
+function handleSendEmojiMessage($input) {
+    global $currentUser;
+    $fromPid = $input['from'] ?? '';
+    $toPid = $input['to'] ?? '';
+    $emojiCode = $input['emoji_code'] ?? '';
+    $emojiUrl = $input['emoji_url'] ?? '';
+    $time = $input['time'] ?? time() * 1000;
+    
+    if (!$fromPid || !$toPid || !$emojiCode) {
+        echo json_encode(['success' => false, 'error' => '参数不完整']);
+        return;
+    }
+    
+    verifyOwnership($fromPid);
+    
+    $emoji = getEmojiByCode($emojiCode);
+    if (!$emoji) {
+        echo json_encode(['success' => false, 'error' => '表情不存在']);
+        return;
+    }
+    
+    $recipientOnline = isUserOnline($toPid);
+    updateUserActivity($fromPid);
+    
+    $conversationId = getOrCreateConversation($fromPid, $toPid);
+    $status = $recipientOnline ? 'delivered' : 'sent';
+    
+    $messageId = saveMessage(
+        $conversationId,
+        $fromPid,
+        $toPid,
+        $emoji['url'],
+        $status,
+        'emoji',
+        null,
+        $emoji['name'],
+        null,
+        null
+    );
+    
+    echo json_encode([
+        'success' => true,
+        'online' => $recipientOnline,
+        'messageId' => $messageId,
+        'status' => $status,
+        'message' => [
+            'id' => $messageId,
+            'from' => $fromPid,
+            'to' => $toPid,
+            'text' => $emoji['url'],
+            'message_type' => 'emoji',
+            'emoji_code' => $emojiCode,
+            'emoji_name' => $emoji['name'],
+            'time' => $time,
+            'status' => $status
+        ]
+    ]);
+}
+
+function handleSendFileMessage($input) {
+    global $currentUser;
+    $fromPid = $input['from'] ?? '';
+    $toPid = $input['to'] ?? '';
+    $filePath = $input['file_path'] ?? '';
+    $fileName = $input['file_name'] ?? '';
+    $fileSize = $input['file_size'] ?? 0;
+    $fileMime = $input['file_mime'] ?? '';
+    $messageType = $input['message_type'] ?? 'file';
+    $time = $input['time'] ?? time() * 1000;
+    
+    if (!$fromPid || !$toPid || !$filePath) {
+        echo json_encode(['success' => false, 'error' => '参数不完整']);
+        return;
+    }
+    
+    verifyOwnership($fromPid);
+    
+    $fullPath = dirname(__DIR__) . '/' . $filePath;
+    if (!file_exists($fullPath)) {
+        echo json_encode(['success' => false, 'error' => '文件不存在']);
+        return;
+    }
+    
+    $recipientOnline = isUserOnline($toPid);
+    updateUserActivity($fromPid);
+    
+    $conversationId = getOrCreateConversation($fromPid, $toPid);
+    $status = $recipientOnline ? 'delivered' : 'sent';
+    
+    $displayText = $messageType === 'image' ? '[图片]' : '[文件] ' . $fileName;
+    
+    $messageId = saveMessage(
+        $conversationId,
+        $fromPid,
+        $toPid,
+        $displayText,
+        $status,
+        $messageType,
+        $filePath,
+        $fileName,
+        $fileSize,
+        $fileMime
+    );
+    
+    echo json_encode([
+        'success' => true,
+        'online' => $recipientOnline,
+        'messageId' => $messageId,
+        'status' => $status,
+        'message' => [
+            'id' => $messageId,
+            'from' => $fromPid,
+            'to' => $toPid,
+            'text' => $displayText,
+            'message_type' => $messageType,
+            'file_path' => $filePath,
+            'file_name' => $fileName,
+            'file_size' => $fileSize,
+            'file_mime' => $fileMime,
+            'time' => $time,
+            'status' => $status
+        ]
+    ]);
 }

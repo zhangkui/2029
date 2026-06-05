@@ -1,0 +1,17 @@
+# 禁止执行脚本
+AddType application/octet-stream .php .php3 .php4 .php5 .phtml .pl .py .jsp .asp .htm .html .shtml .sh .cgi
+
+# 禁止目录列表
+Options -Indexes
+
+# 允许访问的文件类型
+<FilesMatch "\.(jpg|jpeg|png|gif|webp|pdf|doc|docx|xls|xlsx|ppt|pptx|zip|rar|7z|txt|mp3|mp4|avi|csv)$">
+    Order allow,deny
+    Allow from all
+</FilesMatch>
+
+# 禁止访问其他所有文件
+<FilesMatch ".*">
+    Order deny,allow
+    Deny from all
+</FilesMatch>

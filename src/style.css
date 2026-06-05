@@ -1100,3 +1100,316 @@ body {
         right: 10px;
     }
 }
+
+/* 输入区域工具栏 */
+.input-area {
+    position: relative;
+    align-items: center;
+}
+
+.input-tools {
+    display: flex;
+    gap: 5px;
+}
+
+.tool-btn {
+    background: transparent;
+    border: none;
+    padding: 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.tool-btn:hover {
+    background: var(--bg-hover);
+    color: var(--primary-light);
+}
+
+/* 表情面板 */
+.emoji-panel {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 20px;
+    right: 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg);
+    z-index: 100;
+    max-height: 300px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.emoji-categories {
+    display: flex;
+    gap: 5px;
+    padding: 10px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-dark);
+    overflow-x: auto;
+}
+
+.emoji-category-btn {
+    padding: 6px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.emoji-category-btn:hover,
+.emoji-category-btn.active {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: white;
+}
+
+.emoji-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    display: grid;
+    grid-template-columns: repeat(10, 1fr);
+    gap: 5px;
+}
+
+.emoji-item {
+    padding: 8px;
+    font-size: 24px;
+    text-align: center;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.emoji-item:hover {
+    background: var(--bg-hover);
+    transform: scale(1.2);
+}
+
+/* 表情消息样式 */
+.message-bubble.emoji-bubble {
+    background: transparent !important;
+    padding: 5px !important;
+    font-size: 48px;
+    line-height: 1;
+}
+
+.message.sent .message-bubble.emoji-bubble {
+    background: transparent !important;
+}
+
+.message.received .message-bubble.emoji-bubble {
+    background: transparent !important;
+}
+
+/* 图片消息样式 */
+.message-image {
+    max-width: 250px;
+    max-height: 250px;
+    border-radius: 12px;
+    cursor: pointer;
+    overflow: hidden;
+    position: relative;
+}
+
+.message-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.3s;
+}
+
+.message-image:hover img {
+    transform: scale(1.02);
+}
+
+.message-image::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0);
+    transition: background 0.3s;
+    pointer-events: none;
+}
+
+.message-image:hover::after {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+/* 文件消息样式 */
+.message-file {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
+    min-width: 200px;
+    max-width: 300px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.message-file:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.message.sent .message-file {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.message-file-icon {
+    font-size: 36px;
+    flex-shrink: 0;
+}
+
+.message-file-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.message-file-name {
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.message-file-size {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.message.sent .message-file-size {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* 图片查看大图模态框 */
+.image-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 3000;
+    padding: 20px;
+    animation: fadeIn 0.2s ease;
+}
+
+.image-modal-content {
+    position: relative;
+    max-width: 90vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.image-modal-close {
+    position: absolute;
+    top: -50px;
+    right: 0;
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    padding: 10px;
+    border-radius: 50%;
+    color: white;
+    cursor: pointer;
+    transition: all 0.2s;
+    z-index: 1;
+}
+
+.image-modal-close:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.1);
+}
+
+.image-modal-content img {
+    max-width: 100%;
+    max-height: 80vh;
+    border-radius: 8px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.image-modal-info {
+    margin-top: 15px;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 14px;
+    text-align: center;
+}
+
+/* 上传进度提示 */
+.upload-progress {
+    position: fixed;
+    bottom: 30px;
+    right: 30px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 15px 20px;
+    box-shadow: var(--shadow-lg);
+    z-index: 2000;
+    min-width: 250px;
+}
+
+.upload-progress .progress-text {
+    font-size: 14px;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+}
+
+.upload-progress .progress-bar {
+    height: 4px;
+    background: var(--bg-dark);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.upload-progress .progress-fill {
+    height: 100%;
+    background: var(--gradient-1);
+    border-radius: 2px;
+    transition: width 0.3s;
+}
+
+/* 响应式表情面板 */
+@media (max-width: 768px) {
+    .emoji-list {
+        grid-template-columns: repeat(8, 1fr);
+    }
+    
+    .message-image {
+        max-width: 200px;
+        max-height: 200px;
+    }
+    
+    .message-file {
+        min-width: 150px;
+        max-width: 250px;
+    }
+}

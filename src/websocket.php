@@ -271,6 +271,13 @@ function handleMessage($clientId, $client, $message, &$clients, &$pidToSocketId,
             $from = $message['from'] ?? '';
             $text = $message['text'] ?? '';
             $time = $message['time'] ?? time() * 1000;
+            $messageType = $message['message_type'] ?? 'text';
+            $emojiCode = $message['emoji_code'] ?? null;
+            $emojiName = $message['emoji_name'] ?? null;
+            $filePath = $message['file_path'] ?? null;
+            $fileName = $message['file_name'] ?? null;
+            $fileSize = $message['file_size'] ?? null;
+            $fileMime = $message['file_mime'] ?? null;
 
             if ($from !== $authenticatedPid) {
                 sendToClient($client, [
@@ -288,21 +295,45 @@ function handleMessage($clientId, $client, $message, &$clients, &$pidToSocketId,
                 try {
                     $conversationId = getOrCreateConversation($from, $to);
                     $status = $targetOnline ? 'delivered' : 'sent';
-                    $messageId = saveMessage($conversationId, $from, $to, $text, $status);
+                    $messageId = saveMessage(
+                        $conversationId, 
+                        $from, 
+                        $to, 
+                        $text, 
+                        $status,
+                        $messageType,
+                        $filePath,
+                        $fileName,
+                        $fileSize,
+                        $fileMime
+                    );
                 } catch (Exception $e) {
                     error_log("Error saving message: " . $e->getMessage());
                 }
 
+                $messageData = [
+                    'type' => 'message',
+                    'from' => $from,
+                    'to' => $to,
+                    'text' => $text,
+                    'time' => $time,
+                    'messageId' => $messageId,
+                    'status' => $targetOnline ? 'delivered' : 'sent',
+                    'message_type' => $messageType
+                ];
+
+                if ($messageType === 'emoji') {
+                    $messageData['emoji_code'] = $emojiCode;
+                    $messageData['emoji_name'] = $emojiName;
+                } elseif ($messageType === 'image' || $messageType === 'file') {
+                    $messageData['file_path'] = $filePath;
+                    $messageData['file_name'] = $fileName;
+                    $messageData['file_size'] = $fileSize;
+                    $messageData['file_mime'] = $fileMime;
+                }
+
                 if ($targetOnline) {
-                    sendToClient($clients[$targetSocketId], [
-                        'type' => 'message',
-                        'from' => $from,
-                        'to' => $to,
-                        'text' => $text,
-                        'time' => $time,
-                        'messageId' => $messageId,
-                        'status' => 'delivered'
-                    ]);
+                    sendToClient($clients[$targetSocketId], $messageData);
 
                     sendToClient($client, [
                         'type' => 'sent',
@@ -310,22 +341,24 @@ function handleMessage($clientId, $client, $message, &$clients, &$pidToSocketId,
                         'online' => true,
                         'messageId' => $messageId,
                         'status' => 'delivered',
-                        'to' => $to
+                        'to' => $to,
+                        'message_type' => $messageType
                     ]);
 
-                    echo "消息发送: $from -> $to, messageId=$messageId\n";
+                    echo "消息发送: $from -> $to, type=$messageType, messageId=$messageId\n";
                 } else {
                     sendToClient($client, [
                         'type' => 'sent',
-                        'success' => false,
+                        'success' => true,
                         'online' => false,
                         'messageId' => $messageId,
                         'status' => 'sent',
                         'to' => $to,
-                        'error' => '对方已经离开'
+                        'message_type' => $messageType,
+                        'info' => '对方离线，消息已保存，对方上线后可查看'
                     ]);
 
-                    echo "消息存储(对方离线): $from -> $to, messageId=$messageId\n";
+                    echo "消息存储(对方离线): $from -> $to, type=$messageType, messageId=$messageId\n";
                 }
             }
             break;

@@ -153,6 +153,23 @@
                 </div>
                 
                 <div class="input-area">
+                    <div class="input-tools">
+                        <button class="tool-btn" onclick="toggleEmojiPanel()" title="表情">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22">
+                                <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/>
+                            </svg>
+                        </button>
+                        <button class="tool-btn" onclick="selectImage()" title="图片">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22">
+                                <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+                            </svg>
+                        </button>
+                        <button class="tool-btn" onclick="selectFile()" title="文件">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22">
+                                <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11zM8 15.01l1.41 1.41L11 14.84V19h2v-4.16l1.59 1.59L16 15.01 12.01 11 8 15.01z"/>
+                            </svg>
+                        </button>
+                    </div>
                     <input type="text" id="messageInput" placeholder="输入消息..." onkeypress="handleKeyPress(event)">
                     <button onclick="sendMessage()" class="send-btn">
                         <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
@@ -160,6 +177,16 @@
                         </svg>
                     </button>
                 </div>
+                
+                <!-- 表情选择面板 -->
+                <div class="emoji-panel" id="emojiPanel" style="display: none;">
+                    <div class="emoji-categories" id="emojiCategories"></div>
+                    <div class="emoji-list" id="emojiList"></div>
+                </div>
+                
+                <!-- 隐藏的文件选择input -->
+                <input type="file" id="imageInput" accept="image/*" style="display: none;" onchange="handleImageSelect(event)">
+                <input type="file" id="fileInput" style="display: none;" onchange="handleFileSelect(event)">
             </div>
         </div>
     </div>
@@ -174,6 +201,19 @@
                 <path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/>
             </svg>
             <span>撤回消息</span>
+        </div>
+    </div>
+    
+    <!-- 图片查看大图模态框 -->
+    <div class="image-modal" id="imageModal" style="display: none;" onclick="closeImageModal()">
+        <div class="image-modal-content" onclick="event.stopPropagation()">
+            <button class="image-modal-close" onclick="closeImageModal()">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
+                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                </svg>
+            </button>
+            <img id="imageModalImg" src="" alt="大图预览">
+            <div class="image-modal-info" id="imageModalInfo"></div>
         </div>
     </div>
     

@@ -13,6 +13,9 @@ let pendingMessages = {};
 const OFFLINE_GRACE_PERIOD = 30000;
 const RECALL_TIME_LIMIT = 120000;
 let contextMenuTargetMessageId = null;
+let emojis = [];
+let emojiCategories = [];
+let currentEmojiCategory = null;
 
 async function apiRequest(action, options = {}) {
     const headers = {
@@ -269,6 +272,7 @@ async function showChatInterface() {
 
     restoreCurrentChatPid();
     await loadAllData();
+    await loadEmojis();
     
     if (currentChatPid && chats[currentChatPid]) {
         document.getElementById('chatPlaceholder').style.display = 'none';
@@ -284,6 +288,12 @@ async function showChatInterface() {
     
     updateChatList();
     connectWebSocket();
+    
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.emoji-panel') && !e.target.closest('.tool-btn[onclick="toggleEmojiPanel()"]')) {
+            hideEmojiPanel();
+        }
+    });
 }
 
 async function loadAllData() {
@@ -577,11 +587,32 @@ function handleIncomingMessage(data) {
         to: data.to,
         text: data.text,
         time: data.time,
-        status: data.status || 'delivered'
+        status: data.status || 'delivered',
+        message_type: data.message_type || 'text'
     };
 
+    if (data.message_type === 'emoji') {
+        msg.emoji_code = data.emoji_code;
+        msg.emoji_name = data.emoji_name;
+        msg.text = data.text;
+    } else if (data.message_type === 'image' || data.message_type === 'file') {
+        msg.file_path = data.file_path;
+        msg.file_name = data.file_name;
+        msg.file_size = data.file_size;
+        msg.file_mime = data.file_mime;
+    }
+
     chats[chatPid].messages.push(msg);
-    chats[chatPid].lastMessage = data.text;
+    
+    if (data.message_type === 'emoji') {
+        chats[chatPid].lastMessage = '[表情]';
+    } else if (data.message_type === 'image') {
+        chats[chatPid].lastMessage = '[图片]';
+    } else if (data.message_type === 'file') {
+        chats[chatPid].lastMessage = '[文件] ' + (data.file_name || '');
+    } else {
+        chats[chatPid].lastMessage = data.text;
+    }
     chats[chatPid].lastTime = data.time;
 
     if (chatPid !== currentChatPid) {
@@ -627,20 +658,7 @@ function handleSentConfirmation(data) {
     }
 
     if (!data.online) {
-        if (offlineTimers[currentChatPid]) {
-            showToast('对方暂时离线，消息可能无法送达', 'warning');
-        } else {
-            const systemMsg = {
-                type: 'system',
-                text: '对方已经离开，消息无法送达',
-                time: Date.now()
-            };
-            if (currentChatPid && chats[currentChatPid]) {
-                chats[currentChatPid].messages.push(systemMsg);
-                renderMessages();
-            }
-            showToast('对方已经离开', 'error');
-        }
+        showToast(data.info || '对方离线，消息已保存，对方上线后可查看', 'info');
     }
 }
 
@@ -968,24 +986,57 @@ function renderMessages() {
         let statusHtml = '';
         let messageClass = isSent ? 'sent' : 'received';
         let contextMenuHandler = '';
+        let messageContent = '';
+        const messageType = msg.message_type || 'text';
 
         if (isRecalled) {
             messageClass += ' recalled';
             statusHtml = '<span class="message-status status-recalled">已撤回</span>';
-        } else if (isSent && msg.status) {
-            let statusText = '';
-            let statusClass = '';
-            if (msg.status === 'sent') {
-                statusText = '已发送';
-                statusClass = 'status-sent';
-            } else if (msg.status === 'delivered') {
-                statusText = '已送达';
-                statusClass = 'status-delivered';
-            } else if (msg.status === 'read') {
-                statusText = '已读';
-                statusClass = 'status-read';
+            messageContent = '<div class="message-bubble">' + escapeHtml(msg.text) + '</div>';
+        } else {
+            if (messageType === 'emoji') {
+                messageContent = `<div class="message-bubble emoji-bubble" title="${escapeHtml(msg.emoji_name || '')}">${msg.text}</div>`;
+            } else if (messageType === 'image') {
+                const imageUrl = msg.file_path ? encodeURI(msg.file_path) : '';
+                const imageName = msg.file_name || '图片';
+                messageContent = `
+                    <div class="message-image" onclick="openImageModal('${imageUrl}', '${escapeHtml(imageName)}')" title="点击查看大图">
+                        <img src="${imageUrl}" alt="${escapeHtml(imageName)}" loading="lazy">
+                    </div>
+                `;
+            } else if (messageType === 'file') {
+                const fileIcon = getFileIconHtml(msg.file_mime);
+                const fileSize = formatFileSizeHtml(msg.file_size);
+                const fileUrl = msg.file_path ? encodeURI(msg.file_path) : '';
+                const fileName = msg.file_name || '文件';
+                messageContent = `
+                    <div class="message-file" onclick="downloadFile('${fileUrl}', '${escapeHtml(fileName)}')" title="点击下载">
+                        <div class="message-file-icon">${fileIcon}</div>
+                        <div class="message-file-info">
+                            <div class="message-file-name">${escapeHtml(fileName)}</div>
+                            <div class="message-file-size">${fileSize}</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                messageContent = '<div class="message-bubble">' + escapeHtml(msg.text) + '</div>';
             }
-            statusHtml = `<span class="message-status ${statusClass}">${statusText}</span>`;
+
+            if (isSent && msg.status) {
+                let statusText = '';
+                let statusClass = '';
+                if (msg.status === 'sent') {
+                    statusText = '已发送';
+                    statusClass = 'status-sent';
+                } else if (msg.status === 'delivered') {
+                    statusText = '已送达';
+                    statusClass = 'status-delivered';
+                } else if (msg.status === 'read') {
+                    statusText = '已读';
+                    statusClass = 'status-read';
+                }
+                statusHtml = `<span class="message-status ${statusClass}">${statusText}</span>`;
+            }
         }
 
         let recallBtn = '';
@@ -1002,7 +1053,7 @@ function renderMessages() {
             '<div class="avatar"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg></div>' +
             '<div class="message-content">' +
             '<div class="message-sender">' + escapeHtml(senderName) + '</div>' +
-            '<div class="message-bubble">' + escapeHtml(msg.text) + '</div>' +
+            messageContent +
             '<div class="message-meta">' +
             '<span class="message-time">' + timeStr + '</span>' +
             statusHtml +
@@ -1015,11 +1066,20 @@ function renderMessages() {
     container.scrollTop = container.scrollHeight;
 }
 
-function sendMessage() {
+function sendMessage(messageType = 'text', extraData = {}) {
     const input = document.getElementById('messageInput');
-    const text = input.value.trim();
+    let text = '';
+    
+    if (messageType === 'text') {
+        text = input.value.trim();
+        if (!text) return;
+    } else if (messageType === 'emoji') {
+        text = extraData.emojiUrl || '';
+    } else if (messageType === 'image' || messageType === 'file') {
+        text = extraData.displayText || '';
+    }
 
-    if (!text || !currentChatPid) return;
+    if (!currentChatPid) return;
 
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         showToast('连接已断开，正在重连...', 'warning');
@@ -1030,7 +1090,9 @@ function sendMessage() {
         from: myPid,
         to: currentChatPid,
         text: text,
-        time: Date.now()
+        time: Date.now(),
+        message_type: messageType,
+        ...extraData
     };
 
     if (!chats[currentChatPid]) {
@@ -1042,14 +1104,27 @@ function sendMessage() {
         to: message.to,
         text: message.text,
         time: message.time,
-        status: 'sent'
+        status: 'sent',
+        message_type: messageType,
+        ...extraData
     };
 
     chats[currentChatPid].messages.push(tempMsg);
-    chats[currentChatPid].lastMessage = text;
+    
+    if (messageType === 'emoji') {
+        chats[currentChatPid].lastMessage = '[表情]';
+    } else if (messageType === 'image') {
+        chats[currentChatPid].lastMessage = '[图片]';
+    } else if (messageType === 'file') {
+        chats[currentChatPid].lastMessage = '[文件] ' + (extraData.file_name || '');
+    } else {
+        chats[currentChatPid].lastMessage = text;
+    }
     chats[currentChatPid].lastTime = message.time;
 
-    input.value = '';
+    if (messageType === 'text') {
+        input.value = '';
+    }
 
     renderMessages();
     updateChatList();
@@ -1059,7 +1134,9 @@ function sendMessage() {
         from: message.from,
         to: message.to,
         text: message.text,
-        time: message.time
+        time: message.time,
+        message_type: messageType,
+        ...extraData
     }));
 
     apiPost('send', { message: message });
@@ -1213,3 +1290,280 @@ setInterval(async function() {
         }
     }
 }, 5000);
+
+async function loadEmojis() {
+    const result = await apiGet('getEmojis');
+    if (result && result.success) {
+        emojis = result.emojis || [];
+        emojiCategories = result.categories || [];
+        if (emojiCategories.length > 0) {
+            currentEmojiCategory = emojiCategories[0].category;
+        }
+        renderEmojiCategories();
+        renderEmojiList();
+    }
+}
+
+function toggleEmojiPanel() {
+    const panel = document.getElementById('emojiPanel');
+    if (panel.style.display === 'none' || !panel.style.display) {
+        panel.style.display = 'flex';
+    } else {
+        panel.style.display = 'none';
+    }
+}
+
+function hideEmojiPanel() {
+    const panel = document.getElementById('emojiPanel');
+    if (panel) {
+        panel.style.display = 'none';
+    }
+}
+
+function renderEmojiCategories() {
+    const container = document.getElementById('emojiCategories');
+    if (!container) return;
+    
+    const categoryNames = {
+        'face': '表情',
+        'animal': '动物',
+        'nature': '自然',
+        'symbol': '符号',
+        'gesture': '手势',
+        'object': '物品'
+    };
+    
+    container.innerHTML = emojiCategories.map(cat => {
+        const name = categoryNames[cat.category] || cat.category;
+        const isActive = cat.category === currentEmojiCategory;
+        return `<button class="emoji-category-btn ${isActive ? 'active' : ''}" 
+                        onclick="switchEmojiCategory('${cat.category}')">${name}</button>`;
+    }).join('');
+}
+
+function switchEmojiCategory(category) {
+    currentEmojiCategory = category;
+    renderEmojiCategories();
+    renderEmojiList();
+}
+
+function renderEmojiList() {
+    const container = document.getElementById('emojiList');
+    if (!container) return;
+    
+    const filteredEmojis = currentEmojiCategory 
+        ? emojis.filter(e => e.category === currentEmojiCategory)
+        : emojis;
+    
+    container.innerHTML = filteredEmojis.map(emoji => {
+        return `<div class="emoji-item" 
+                        onclick="selectEmoji('${emoji.code}', '${emoji.url}', '${escapeHtml(emoji.name)}')" 
+                        title="${escapeHtml(emoji.name)}">${emoji.url}</div>`;
+    }).join('');
+}
+
+function selectEmoji(code, url, name) {
+    hideEmojiPanel();
+    
+    const extraData = {
+        emoji_code: code,
+        emoji_url: url,
+        emoji_name: name
+    };
+    
+    sendMessage('emoji', extraData);
+}
+
+function selectImage() {
+    document.getElementById('imageInput').click();
+}
+
+function handleImageSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    if (!file.type.startsWith('image/')) {
+        showToast('请选择图片文件', 'error');
+        return;
+    }
+    
+    uploadFile(file, 'image');
+    event.target.value = '';
+}
+
+function selectFile() {
+    document.getElementById('fileInput').click();
+}
+
+function handleFileSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    uploadFile(file, 'file');
+    event.target.value = '';
+}
+
+async function uploadFile(file, fileType) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('file_type', fileType);
+    
+    const progressDiv = showUploadProgress(file.name);
+    
+    try {
+        const result = await apiUpload('uploadFile', formData, (progress) => {
+            updateUploadProgress(progressDiv, progress);
+        });
+        
+        hideUploadProgress(progressDiv);
+        
+        if (result && result.success) {
+            const extraData = {
+                file_path: result.file_path,
+                file_name: result.file_name,
+                file_size: result.file_size,
+                file_mime: result.file_mime,
+                displayText: fileType === 'image' ? '[图片]' : '[文件] ' + result.file_name
+            };
+            
+            sendMessage(fileType, extraData);
+        } else {
+            showToast(result.error || '上传失败', 'error');
+        }
+    } catch (e) {
+        hideUploadProgress(progressDiv);
+        showToast('上传失败', 'error');
+    }
+}
+
+async function apiUpload(action, formData, onProgress) {
+    const url = 'api.php?action=' + action + '&token=' + authToken;
+    
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        
+        xhr.upload.onprogress = function(e) {
+            if (e.lengthComputable && onProgress) {
+                const progress = Math.round((e.loaded / e.total) * 100);
+                onProgress(progress);
+            }
+        };
+        
+        xhr.onload = function() {
+            try {
+                const data = JSON.parse(xhr.responseText);
+                resolve(data);
+            } catch (e) {
+                reject(e);
+            }
+        };
+        
+        xhr.onerror = function() {
+            reject(new Error('Network error'));
+        };
+        
+        xhr.send(formData);
+    });
+}
+
+function showUploadProgress(fileName) {
+    const div = document.createElement('div');
+    div.className = 'upload-progress';
+    div.innerHTML = `
+        <div class="progress-text">正在上传: ${escapeHtml(fileName)}</div>
+        <div class="progress-bar">
+            <div class="progress-fill" style="width: 0%"></div>
+        </div>
+    `;
+    document.body.appendChild(div);
+    return div;
+}
+
+function updateUploadProgress(div, progress) {
+    const fill = div.querySelector('.progress-fill');
+    if (fill) {
+        fill.style.width = progress + '%';
+    }
+}
+
+function hideUploadProgress(div) {
+    if (div && div.parentNode) {
+        div.parentNode.removeChild(div);
+    }
+}
+
+function openImageModal(imageUrl, imageName) {
+    const modal = document.getElementById('imageModal');
+    const img = document.getElementById('imageModalImg');
+    const info = document.getElementById('imageModalInfo');
+    
+    img.src = imageUrl;
+    img.alt = imageName;
+    info.textContent = imageName;
+    
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+
+function closeImageModal() {
+    const modal = document.getElementById('imageModal');
+    modal.style.display = 'none';
+    document.body.style.overflow = '';
+}
+
+function downloadFile(fileUrl, fileName) {
+    const a = document.createElement('a');
+    a.href = fileUrl;
+    a.download = fileName;
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+function getFileIconHtml(mimeType) {
+    const icons = {
+        'image/': '🖼️',
+        'video/': '🎬',
+        'audio/': '🎵',
+        'application/pdf': '📄',
+        'application/msword': '📝',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '📝',
+        'application/vnd.ms-excel': '📊',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '📊',
+        'application/vnd.ms-powerpoint': '📽️',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation': '📽️',
+        'application/zip': '📦',
+        'application/x-rar-compressed': '📦',
+        'application/x-7z-compressed': '📦',
+        'text/plain': '📃',
+        'text/csv': '📊',
+    };
+
+    for (const prefix in icons) {
+        if (mimeType && mimeType.indexOf(prefix) === 0) {
+            return icons[prefix];
+        }
+    }
+    return '📁';
+}
+
+function formatFileSizeHtml(bytes) {
+    if (!bytes) return '';
+    if (bytes < 1024) {
+        return bytes + ' B';
+    } else if (bytes < 1048576) {
+        return (bytes / 1024).toFixed(2) + ' KB';
+    } else if (bytes < 1073741824) {
+        return (bytes / 1048576).toFixed(2) + ' MB';
+    } else {
+        return (bytes / 1073741824).toFixed(2) + ' GB';
+    }
+}
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closeImageModal();
+    }
+});

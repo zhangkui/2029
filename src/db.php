@@ -179,12 +179,12 @@ function setUserOffline($pid) {
     );
 }
 
-function saveMessage($conversationId, $fromPid, $toPid, $text, $status = 'sent') {
+function saveMessage($conversationId, $fromPid, $toPid, $text, $status = 'sent', $messageType = 'text', $filePath = null, $fileName = null, $fileSize = null, $fileMime = null) {
     $db = getDb();
     return $db->insert(
-        "INSERT INTO messages (conversation_id, from_pid, to_pid, message_text, status) 
-         VALUES (?, ?, ?, ?, ?)",
-        [$conversationId, $fromPid, $toPid, $text, $status]
+        "INSERT INTO messages (conversation_id, from_pid, to_pid, message_text, status, message_type, file_path, file_name, file_size, file_mime) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [$conversationId, $fromPid, $toPid, $text, $status, $messageType, $filePath, $fileName, $fileSize, $fileMime]
     );
 }
 
@@ -287,6 +287,9 @@ function getUserConversations($userPid) {
                 u.username as other_username,
                 CASE 
                     WHEN m.status = 'recalled' THEN '该消息已撤回'
+                    WHEN m.message_type = 'emoji' THEN '[表情]'
+                    WHEN m.message_type = 'image' THEN '[图片]'
+                    WHEN m.message_type = 'file' THEN CONCAT('[文件] ', m.file_name)
                     ELSE m.message_text 
                 END as last_message,
                 m.created_at as last_time,
@@ -318,7 +321,8 @@ function getUserConversations($userPid) {
 function getConversationMessages($conversationId, $limit = 100, $offset = 0) {
     $db = getDb();
     $messages = $db->fetchAll(
-        "SELECT id, from_pid, to_pid, message_text as text, status, 
+        "SELECT id, from_pid, to_pid, message_text as text, status, message_type, 
+                file_path, file_name, file_size, file_mime,
                 UNIX_TIMESTAMP(created_at) * 1000 as time
          FROM messages 
          WHERE conversation_id = ? 
@@ -457,4 +461,71 @@ function cleanupExpiredTokens() {
     return $db->execute(
         "DELETE FROM user_tokens WHERE expires_at IS NOT NULL AND expires_at <= NOW()"
     );
+}
+
+function getAllEmojis($category = null) {
+    $db = getDb();
+    if ($category) {
+        return $db->fetchAll(
+            "SELECT id, code, name, url, category FROM emojis WHERE category = ? ORDER BY sort_order ASC",
+            [$category]
+        );
+    }
+    return $db->fetchAll(
+        "SELECT id, code, name, url, category FROM emojis ORDER BY category ASC, sort_order ASC"
+    );
+}
+
+function getEmojiByCode($code) {
+    $db = getDb();
+    return $db->fetchOne(
+        "SELECT id, code, name, url, category FROM emojis WHERE code = ?",
+        [$code]
+    );
+}
+
+function getEmojiCategories() {
+    $db = getDb();
+    return $db->fetchAll(
+        "SELECT DISTINCT category FROM emojis ORDER BY category ASC"
+    );
+}
+
+function formatFileSize($bytes) {
+    if ($bytes < 1024) {
+        return $bytes . ' B';
+    } elseif ($bytes < 1048576) {
+        return round($bytes / 1024, 2) . ' KB';
+    } elseif ($bytes < 1073741824) {
+        return round($bytes / 1048576, 2) . ' MB';
+    } else {
+        return round($bytes / 1073741824, 2) . ' GB';
+    }
+}
+
+function getFileIcon($mimeType) {
+    $icons = [
+        'image/' => '🖼️',
+        'video/' => '🎬',
+        'audio/' => '🎵',
+        'application/pdf' => '📄',
+        'application/msword' => '📝',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => '📝',
+        'application/vnd.ms-excel' => '📊',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => '📊',
+        'application/vnd.ms-powerpoint' => '📽️',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation' => '📽️',
+        'application/zip' => '📦',
+        'application/x-rar-compressed' => '📦',
+        'application/x-7z-compressed' => '📦',
+        'text/plain' => '📃',
+        'text/csv' => '📊',
+    ];
+
+    foreach ($icons as $prefix => $icon) {
+        if (strpos($mimeType, $prefix) === 0) {
+            return $icon;
+        }
+    }
+    return '📁';
 }
